@@ -1,0 +1,72 @@
+# ---- macOS ----
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+.Spotlight-V100
+.Trashes
+
+# ---- Xcode ----
+build/
+DerivedData/
+*.moved-aside
+*.pbxuser
+!default.pbxuser
+*.mode1v3
+!default.mode1v3
+*.mode2v3
+!default.mode2v3
+*.perspectivev3
+!default.perspectivev3
+*.xcuserstate
+*.xcscmblueprint
+*.xccheckout
+
+# User-specific Xcode state (shared schemes ARE tracked)
+xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+*.xcworkspace/contents.xcworkspacedata.lock
+
+# Generated project — SplitLane.xcodeproj is produced by XcodeGen from project.yml.
+# See docs/DEVELOPMENT.md. Regenerate with: xcodegen generate
+SplitLane.xcodeproj/
+
+# ---- Swift Package Manager ----
+.build/
+.swiftpm/
+Packages/
+Package.resolved.backup
+*.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/
+
+# ---- Secrets / local config ----
+# Never commit signing material or local machine specifics.
+*.p12
+*.mobileprovision
+*.provisionprofile
+*.cer
+*.certSigningRequest
+Local.xcconfig
+Secrets.xcconfig
+.env
+.env.*
+!.env.example
+secrets/
+
+# ---- Build/test artifacts ----
+*.log
+*.dSYM.zip
+*.dSYM
+TestResults/
+*.xcresult
+coverage/
+
+# ---- Editor ----
+.vscode/*
+!.vscode/settings.json.example
+.idea/
+
+# ---- Claude Code local state ----
+.claude/settings.local.json
