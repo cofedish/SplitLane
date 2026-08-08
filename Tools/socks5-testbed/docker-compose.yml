@@ -1,0 +1,61 @@
+# SOCKS5 testbed for SplitLane integration tests.
+#
+# The design point worth noting: `origin` publishes no ports. It is reachable only from inside the
+# `lane` network, which the host is not on. So if an integration test running on the host receives
+# an HTTP response from `origin`, the bytes can only have travelled through the SOCKS5 proxy.
+# A test that merely "succeeded" against a host-reachable server would prove nothing about
+# whether the proxy was involved at all.
+#
+# Ports deliberately avoid 10808: that is SplitLane's real upstream default, and a developer very
+# likely has an actual proxy listening there.
+
+name: splitlane-socks5-testbed
+
+services:
+  # Origin web server. No published ports — unreachable from the host on purpose.
+  origin:
+    image: nginx:alpine
+    container_name: splitlane-origin
+    networks:
+      lane:
+        aliases:
+          - origin.test
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1/"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  # SOCKS5 with no authentication.
+  socks5-noauth:
+    image: serjs/go-socks5-proxy
+    container_name: splitlane-socks5-noauth
+    environment:
+      # The image requires auth by default and exits if no credentials are set.
+      REQUIRE_AUTH: "false"
+    ports:
+      - "127.0.0.1:11080:1080"
+    networks:
+      - lane
+    depends_on:
+      origin:
+        condition: service_healthy
+
+  # SOCKS5 requiring RFC 1929 username/password.
+  socks5-auth:
+    image: serjs/go-socks5-proxy
+    container_name: splitlane-socks5-auth
+    environment:
+      PROXY_USER: splitlane
+      PROXY_PASSWORD: lane-secret
+    ports:
+      - "127.0.0.1:11081:1080"
+    networks:
+      - lane
+    depends_on:
+      origin:
+        condition: service_healthy
+
+networks:
+  lane:
+    driver: bridge

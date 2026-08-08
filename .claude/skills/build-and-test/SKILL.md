@@ -45,10 +45,10 @@ Unit tests never touch the network. Integration tests are opt-in via an environm
 `swift test` stays hermetic by default.
 
 ```bash
-Tools/socks5-testbed/up.sh                        # 10808 no-auth, 10809 user/pass
-SPLITLANE_SOCKS5_INTEGRATION=1 swift test --filter Integration
+Tools/socks5-testbed/up.sh                        # 11080 no-auth, 11081 user/pass
+SPLITLANE_SOCKS5_INTEGRATION=1 swift test
 Tools/socks5-testbed/down.sh
-docker logs splitlane-socks5                      # when a test fails mysteriously
+docker compose -f Tools/socks5-testbed/docker-compose.yml logs   # when a test fails
 ```
 
 ## App + extension — requires Xcode

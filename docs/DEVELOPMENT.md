@@ -40,17 +40,19 @@ swift build 2>&1 | grep -E 'warning|error'
 
 ### Integration tests against a real SOCKS5 server
 
-Unit tests never touch the network. Integration tests run against a Dante SOCKS5 server in
-Docker and are skipped unless explicitly enabled.
+Unit tests never touch the network. Integration tests run against a real SOCKS5 server in Docker
+and are skipped unless explicitly enabled.
 
 ```bash
-Tools/socks5-testbed/up.sh                                  # 127.0.0.1:10808 (no auth)
-                                                            # 127.0.0.1:10809 (user/pass)
-SPLITLANE_SOCKS5_INTEGRATION=1 swift test --filter Integration
+Tools/socks5-testbed/up.sh                                  # 127.0.0.1:11080 (no auth)
+                                                            # 127.0.0.1:11081 (user/pass)
+SPLITLANE_SOCKS5_INTEGRATION=1 swift test
 Tools/socks5-testbed/down.sh
 ```
 
-See `Tools/socks5-testbed/README.md`.
+The origin server in the testbed publishes no ports, so it is unreachable from the host. A
+successful response through the proxy is therefore positive proof the bytes traversed it, rather
+than a test that would pass either way. See `Tools/socks5-testbed/README.md`.
 
 ### App + extension (requires Xcode)
 

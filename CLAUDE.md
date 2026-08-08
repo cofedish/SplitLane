@@ -99,8 +99,8 @@ Never hand-edit `project.pbxproj`. It is generated. Edit `project.yml` and regen
 
 ```bash
 swift test                                       # unit tests, no network
-Tools/socks5-testbed/up.sh                       # start Dante SOCKS5 on 127.0.0.1:10808
-SPLITLANE_SOCKS5_INTEGRATION=1 swift test --filter Integration
+Tools/socks5-testbed/up.sh                       # SOCKS5 on 127.0.0.1:11080 (+11081 auth)
+SPLITLANE_SOCKS5_INTEGRATION=1 swift test
 Tools/socks5-testbed/down.sh
 ```
 
