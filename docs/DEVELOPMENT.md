@@ -57,7 +57,7 @@ than a test that would pass either way. See `Tools/socks5-testbed/README.md`.
 ### App + extension (requires Xcode)
 
 ```bash
-xcodegen generate                                           # project.yml -> SplitLane.xcodeproj
+Tools/generate-project.sh                                   # project.yml -> SplitLane.xcodeproj
 xcodebuild -project SplitLane.xcodeproj -list               # discover schemes; never invent args
 xcodebuild -project SplitLane.xcodeproj -scheme SplitLane \
            -configuration Debug -destination 'platform=macOS,arch=arm64' build

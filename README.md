@@ -55,7 +55,7 @@ Milestone-by-milestone state: [docs/ROADMAP.md](docs/ROADMAP.md).
 ```bash
 swift build && swift test          # core: works with Command Line Tools alone
 
-xcodegen generate                  # app + extension: needs Xcode
+Tools/generate-project.sh          # app + extension: needs Xcode
 xcodebuild -project SplitLane.xcodeproj -scheme SplitLane build
 ```
 

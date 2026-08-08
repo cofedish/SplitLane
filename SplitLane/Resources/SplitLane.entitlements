@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Lets the app install and activate its embedded system extension. -->
+	<key>com.apple.developer.system-extension.install</key>
+	<true/>
+
+	<!-- The app configures the NETransparentProxyManager, so it needs the capability too.
+	     Not available to free/personal teams — see docs/DEVELOPMENT.md Gate 2. -->
+	<key>com.apple.developer.networking.networkextension</key>
+	<array>
+		<string>app-proxy-provider-systemextension</string>
+	</array>
+
+	<!-- App Sandbox is off. A sandboxed app cannot activate a system extension, and the
+	     Keychain/NE preference access this app needs is outside a sandbox container. -->
+	<key>com.apple.security.app-sandbox</key>
+	<false/>
+</dict>
+</plist>

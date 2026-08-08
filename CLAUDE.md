@@ -82,13 +82,17 @@ Core (works today, Command Line Tools only — no Xcode required):
 swift build                       # build SplitLaneCore
 swift build -c release
 swift test                        # all unit tests
-swift test --filter SOCKS5        # subset
+Tools/typecheck-targets.sh        # type-check app + extension against the real SDK, no Xcode
 ```
+
+`Tools/typecheck-targets.sh` is how the app and extension are verified before Xcode exists on the
+machine. It catches missing overrides, wrong signatures and concurrency errors — everything short
+of linking, signing and embedding.
 
 App + extension (requires full Xcode — see "Current external/manual gates"):
 
 ```bash
-xcodegen generate                 # regenerate SplitLane.xcodeproj from project.yml
+Tools/generate-project.sh         # regenerate SplitLane.xcodeproj from project.yml
 xcodebuild -project SplitLane.xcodeproj -scheme SplitLane -configuration Debug build
 xcodebuild -project SplitLane.xcodeproj -list      # discover schemes before inventing args
 ```
@@ -123,10 +127,12 @@ automatically. On divergence: stop and describe the state. See `docs/GIT_WORKFLO
 
 ## Current milestone
 
-M0 complete. Working toward M1 (host app shell) — see `docs/ROADMAP.md`.
+M0 complete. Core (M6 RuleEngine, M7 SOCKS5) done and tested. App, extension, provider, relay and
+XcodeGen spec written and type-checking; none of it has ever run. Blocked on Gate 1 (Xcode) and
+Gate 2 (Apple Developer membership) for M1–M4.
 
-Core-side work (M6 RuleEngine, M7 SOCKS5) is being done ahead of M1 because it is the part that
-is fully buildable and testable on this machine right now without Xcode.
+Milestones are being worked out of numeric order because the pure layers are verifiable today and
+M1–M4 are not. See `docs/ROADMAP.md`.
 
 ## Current known limitations
 
@@ -140,6 +146,12 @@ is fully buildable and testable on this machine right now without Xcode.
   `docs/THREAT_MODEL.md`; team-identifier verification via audit token is the hardening path.
 - Provider downtime (crash/restart) means flows go DIRECT for that window. Fail-open by platform
   design; cannot be prevented from within the provider.
+- **The extension target builds in Swift 5 language mode** (strict concurrency still complete).
+  Under Swift 6 the only overridable UDP entry point is not visible on the class, so UDP could not
+  be handled at all. Verified by compilation; see ADR 0008.
+- **UNVERIFIED / highest open risk:** that macOS still dispatches UDP flows to the deprecated
+  `handleNewUDPFlow(_:initialRemoteEndpoint:)`. If it does not, selected-app UDP escapes DIRECT
+  silently. Must be confirmed at M9 before M10 can pass.
 
 ## Current external/manual gates
 

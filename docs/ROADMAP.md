@@ -8,11 +8,11 @@ Everything before it is in service of that. Nothing after it starts before it pa
 | Milestone | State |
 |---|---|
 | M0 · Repository bootstrap | ✅ done |
-| M1 · Native host app shell | ⛔ blocked — Gate 1 (Xcode) |
-| M2 · Transparent proxy extension skeleton | ⛔ blocked — Gate 1, Gate 2 |
+| M1 · Native host app shell | 🟡 written + type-checks, unbuildable — Gate 1 |
+| M2 · Transparent proxy extension skeleton | 🟡 written + type-checks, project generates — Gate 1, 2 |
 | M3 · Extension lifecycle | ⛔ blocked — Gate 2, Gate 3 |
 | M4 · Flow diagnostics | ⛔ blocked — Gate 3 |
-| M5 · Application picker and identity | 🟡 core done, UI blocked |
+| M5 · Application picker and identity | 🟡 inspector + picker written, unrun |
 | M6 · Rule Engine | ✅ done (unit-tested) |
 | M6.5 · Audit-token identity hardening | ⬜ planned |
 | M7 · SOCKS5 client | ✅ done (unit + integration tested) |
@@ -29,8 +29,16 @@ are fully buildable and testable on this machine today, while M1–M4 require Xc
 Developer account. Ordering by what can actually be verified beats ordering by number. See
 `docs/DEVELOPMENT.md` → External gates.
 
-"Written, not runtime-verified" means the code exists and compiles as part of the extension target
-but has never handled a real flow. It is not done.
+Legend, and the distinctions are deliberate:
+
+- **type-checks** — `Tools/typecheck-targets.sh` passes against the real macOS SDK. Signatures,
+  overrides and concurrency are correct. Nothing has been linked, signed, embedded or run.
+- **unit-tested** — `swift test` covers it.
+- **integration-tested** — exercised against a real server.
+- **runtime-verified** — has actually handled a real flow on a real Mac. Nothing in this project
+  has reached this level yet, because no line of the extension has ever executed.
+
+"Written, not runtime-verified" is not done.
 
 ---
 
@@ -89,7 +97,7 @@ Addresses F-2. Requires a live provider, so it follows M4.
 
 Method negotiation, NO AUTH, RFC 1929 username/password, CONNECT, IPv4/IPv6/DOMAIN, reply
 parsing, timeouts, cancellation, structured errors, bounds-checked parsing.
-**DoD met:** unit tests pass; real connections through Dante in Docker succeed for no-auth,
+**DoD met:** unit tests pass; real connections through a SOCKS5 server in Docker succeed for no-auth,
 username/password, domain, IPv4, and the failure paths.
 
 ## M8 · TCP relay

@@ -1,0 +1,9 @@
+// Copy to Local.xcconfig (git-ignored) and fill in your Apple Developer Team ID.
+//
+//   security find-identity -v -p codesigning
+//
+// The NetworkExtension entitlement requires a paid Apple Developer Program membership; it is not
+// issuable to a free/personal team. See docs/DEVELOPMENT.md → Gate 2.
+
+DEVELOPMENT_TEAM = XXXXXXXXXX
+CODE_SIGN_STYLE = Automatic

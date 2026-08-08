@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>SYSX</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<!-- NetworkExtension instantiates the class named here when the provider starts. The name
+	     must be the Objective-C runtime name; without the module prefix the framework cannot
+	     find a Swift class, which presents as a provider that starts and immediately stops. -->
+	<key>NetworkExtension</key>
+	<dict>
+		<key>NEMachServiceName</key>
+		<string>$(TeamIdentifierPrefix)dev.cofe.splitlane.proxyextension</string>
+		<key>NEProviderClasses</key>
+		<dict>
+			<key>com.apple.networkextension.app-proxy</key>
+			<string>$(PRODUCT_MODULE_NAME).TransparentProxyProvider</string>
+		</dict>
+	</dict>
+</dict>
+</plist>

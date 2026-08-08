@@ -74,8 +74,27 @@ identifier for a picked app and routes on the signing identifier. See ADR 0002.
   the `NWEndpoint` variant is deprecated as of macOS 15.
 
 Because the whole modern surface lands on macOS 15.0, SplitLane sets a **deployment target of
-macOS 15.0** and uses the non-deprecated APIs exclusively. That avoids a codebase littered with
-availability branches and deprecation warnings.
+macOS 15.0** and prefers the non-deprecated APIs.
+
+**One exception, verified by compilation rather than assumed.** The UDP entry point cannot use the
+modern form from Swift at all:
+
+| Attempt | Result on this SDK |
+|---|---|
+| `override handleNewUDPFlow(_:initialRemoteFlowEndpoint:)` | "method does not override any method from its superclass" — `swift-api-digester` shows it imported as an *extension* member with no owning class, and Swift cannot override those |
+| `@objc(handleNewUDPFlow:initialRemoteFlowEndpoint:)` declared directly | "cannot be marked @objc because the type of the parameter cannot be represented in Objective-C" — `Network.NWEndpoint` is a Swift-only enum |
+| `override handleNewUDPFlow(_:initialRemoteEndpoint:)` (deprecated) | **Compiles — but only in Swift 5 language mode.** Under Swift 6 the method is absent from the class entirely |
+
+So the extension target builds with `SWIFT_VERSION = 5.0` (strict concurrency still complete), and
+the UDP override lives in a file that does not `import Network` — because NetworkExtension
+re-exports Network and both define `NWEndpoint`, making even `NetworkExtension.NWEndpoint`
+ambiguous. Full reasoning in ADR 0008.
+
+**UNVERIFIED, and the project's most important open risk:** that macOS 15.x still dispatches UDP
+flows to the deprecated selector. If it does not, the override is dead code and selected-app UDP
+escapes DIRECT silently. *Experiment (M9):* generate UDP/443 traffic from a selected app and
+confirm a `BLOCK udp` line appears in the routing log. Fallback: an Objective-C shim implementing
+the modern selector.
 
 ### 1.4 Network rules and their restrictions
 

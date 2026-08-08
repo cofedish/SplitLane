@@ -70,3 +70,4 @@ coverage/
 
 # ---- Claude Code local state ----
 .claude/settings.local.json
+Local.xcconfig

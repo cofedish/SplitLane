@@ -1,0 +1,126 @@
+# XcodeGen spec for SplitLane.
+#
+# SplitLane.xcodeproj is GENERATED from this file and is git-ignored. Never hand-edit
+# project.pbxproj — change this and run `xcodegen generate`. See ADR 0007.
+#
+# Requires Xcode. `swift build` / `swift test` cover SplitLaneCore without it.
+
+name: SplitLane
+
+options:
+  bundleIdPrefix: dev.cofe
+  deploymentTarget:
+    macOS: "15.0"
+  createIntermediateGroups: true
+  generateEmptyDirectories: false
+  # Schemes are declared explicitly below so `xcodebuild -list` is stable.
+  xcodeVersion: "16.0"
+
+configs:
+  Debug: debug
+  Release: release
+
+settings:
+  base:
+    MACOSX_DEPLOYMENT_TARGET: "15.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    ENABLE_HARDENED_RUNTIME: true
+    CODE_SIGN_STYLE: Automatic
+    # DEVELOPMENT_TEAM comes from Local.xcconfig, which is git-ignored. Copy
+    # Local.xcconfig.example and fill in your team ID. See docs/DEVELOPMENT.md → Gate 2.
+    DEAD_CODE_STRIPPING: true
+    GCC_TREAT_WARNINGS_AS_ERRORS: false
+    SWIFT_TREAT_WARNINGS_AS_ERRORS: false
+  configs:
+    Debug:
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+      ONLY_ACTIVE_ARCH: true
+    Release:
+      SWIFT_COMPILATION_MODE: wholemodule
+
+configFiles:
+  Debug: Local.xcconfig
+  Release: Local.xcconfig
+
+packages:
+  SplitLaneCore:
+    path: .
+
+targets:
+
+  # ---------------------------------------------------------------------------
+  # Host application
+  # ---------------------------------------------------------------------------
+  SplitLane:
+    type: application
+    platform: macOS
+    sources:
+      - path: SplitLane
+        excludes:
+          - "**/.DS_Store"
+    dependencies:
+      - package: SplitLaneCore
+        product: SplitLaneCore
+      # Embedding the extension under Contents/Library/SystemExtensions is what makes the app
+      # able to activate it. `embed: true` plus `codeSign: true` is the whole mechanism.
+      - target: SplitLaneProxyExtension
+        embed: true
+        codeSign: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.cofe.splitlane
+        PRODUCT_NAME: SplitLane
+        INFOPLIST_FILE: SplitLane/Resources/Info.plist
+        CODE_SIGN_ENTITLEMENTS: SplitLane/Resources/SplitLane.entitlements
+        SWIFT_VERSION: "6.0"
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        COMBINE_HIDPI_IMAGES: true
+        ENABLE_APP_SANDBOX: false
+    # System extensions are only activated from an app in /Applications, so the extension is
+    # copied into the right place inside the bundle rather than the default PlugIns directory.
+    buildRules: []
+
+  # ---------------------------------------------------------------------------
+  # Transparent proxy system extension
+  # ---------------------------------------------------------------------------
+  SplitLaneProxyExtension:
+    type: system-extension
+    platform: macOS
+    sources:
+      - path: SplitLaneProxyExtension
+        excludes:
+          - "**/.DS_Store"
+    dependencies:
+      - package: SplitLaneCore
+        product: SplitLaneCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.cofe.splitlane.proxyextension
+        PRODUCT_NAME: dev.cofe.splitlane.proxyextension
+        INFOPLIST_FILE: SplitLaneProxyExtension/Resources/Info.plist
+        CODE_SIGN_ENTITLEMENTS: SplitLaneProxyExtension/Resources/SplitLaneProxyExtension.entitlements
+        # Swift 5, deliberately, and this is load-bearing. Under Swift 6 the only overridable UDP
+        # entry point — handleNewUDPFlow(_:initialRemoteEndpoint:) — is not visible on the class,
+        # so UDP could not be handled at all and selected-app QUIC would escape DIRECT. Strict
+        # concurrency checking stays on. See ADR 0008 and the comment in
+        # SplitLaneProxyExtension/UDP/TransparentProxyProvider+UDP.swift.
+        SWIFT_VERSION: "5.0"
+        SWIFT_STRICT_CONCURRENCY: complete
+        MARKETING_VERSION: "0.1.0"
+        # Bump on every rebuild you intend macOS to actually install: the system caches the
+        # activated extension by version and silently ignores a same-version replacement.
+        CURRENT_PROJECT_VERSION: "1"
+        ENABLE_APP_SANDBOX: false
+        SKIP_INSTALL: true
+
+schemes:
+  SplitLane:
+    build:
+      targets:
+        SplitLane: all
+        SplitLaneProxyExtension: all
+    run:
+      config: Debug
+    archive:
+      config: Release
