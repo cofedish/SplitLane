@@ -1,0 +1,125 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!--
+        One palette, defined once.
+
+        Surfaces are translucent so the window's composition backdrop shows through them. That is
+        what makes the interface read as layered glass rather than as flat panels — but it also means
+        every colour here has to survive being composited over an unknown wallpaper, so the scrim
+        beneath the content is dark and dense enough that text contrast never depends on what is
+        behind the window.
+
+        The lane colours are the load-bearing ones. DIRECT and PROXY are the two states the whole
+        product exists to distinguish, so they are never told apart by shade alone: every place they
+        appear also carries a word. Colour is the reinforcement, not the signal.
+    -->
+
+    <!-- Base tints -->
+    <Color x:Key="BackgroundColor">#0B0D12</Color>
+    <Color x:Key="SidebarColor">#0E1016</Color>
+    <Color x:Key="SurfaceColor">#181C24</Color>
+    <Color x:Key="SurfaceRaisedColor">#20252F</Color>
+    <Color x:Key="SurfaceHoverColor">#272D39</Color>
+    <Color x:Key="BorderColor">#2A303C</Color>
+    <Color x:Key="BorderStrongColor">#3B4353</Color>
+
+    <!-- Text -->
+    <Color x:Key="TextColor">#EDF0F7</Color>
+    <Color x:Key="TextMutedColor">#A0AABF</Color>
+    <Color x:Key="TextFaintColor">#717B90</Color>
+
+    <!-- Accent and lanes -->
+    <Color x:Key="AccentColor">#6D9BFF</Color>
+    <Color x:Key="AccentHoverColor">#8CB2FF</Color>
+    <Color x:Key="AccentPressedColor">#5480E6</Color>
+    <Color x:Key="ProxyColor">#3DDC8C</Color>
+    <Color x:Key="DirectColor">#939DB1</Color>
+    <Color x:Key="BlockedColor">#FF8071</Color>
+    <Color x:Key="WarningColor">#F5BC63</Color>
+
+    <!--
+        The scrim: what actually sits between the composition backdrop and the content.
+
+        Dense enough that body text always clears contrast against a bright wallpaper, sheer enough
+        that the blur is still visible. If the backdrop fails to apply, this is simply a dark window,
+        which is why nothing else in the theme assumes transparency.
+    -->
+    <SolidColorBrush x:Key="WindowScrimBrush" Color="#C2080A0F" />
+    <SolidColorBrush x:Key="SidebarScrimBrush" Color="#3A05070B" />
+
+    <SolidColorBrush x:Key="BackgroundBrush" Color="{StaticResource BackgroundColor}" />
+    <SolidColorBrush x:Key="SidebarBrush" Color="{StaticResource SidebarColor}" />
+    <SolidColorBrush x:Key="SurfaceBrush" Color="{StaticResource SurfaceColor}" Opacity="0.55" />
+    <SolidColorBrush x:Key="SurfaceSolidBrush" Color="{StaticResource SurfaceColor}" />
+    <SolidColorBrush x:Key="SurfaceRaisedBrush" Color="{StaticResource SurfaceRaisedColor}" Opacity="0.8" />
+    <SolidColorBrush x:Key="SurfaceHoverBrush" Color="{StaticResource SurfaceHoverColor}" Opacity="0.85" />
+    <SolidColorBrush x:Key="BorderBrush" Color="{StaticResource BorderColor}" Opacity="0.85" />
+    <SolidColorBrush x:Key="BorderStrongBrush" Color="{StaticResource BorderStrongColor}" />
+
+    <SolidColorBrush x:Key="TextBrush" Color="{StaticResource TextColor}" />
+    <SolidColorBrush x:Key="TextMutedBrush" Color="{StaticResource TextMutedColor}" />
+    <SolidColorBrush x:Key="TextFaintBrush" Color="{StaticResource TextFaintColor}" />
+
+    <SolidColorBrush x:Key="AccentBrush" Color="{StaticResource AccentColor}" />
+    <SolidColorBrush x:Key="AccentHoverBrush" Color="{StaticResource AccentHoverColor}" />
+    <SolidColorBrush x:Key="AccentPressedBrush" Color="{StaticResource AccentPressedColor}" />
+    <SolidColorBrush x:Key="ProxyBrush" Color="{StaticResource ProxyColor}" />
+    <SolidColorBrush x:Key="DirectBrush" Color="{StaticResource DirectColor}" />
+    <SolidColorBrush x:Key="BlockedBrush" Color="{StaticResource BlockedColor}" />
+    <SolidColorBrush x:Key="WarningBrush" Color="{StaticResource WarningColor}" />
+
+    <!-- Tinted fills for badges, kept faint so the label stays the thing you read. -->
+    <SolidColorBrush x:Key="ProxyTintBrush" Color="{StaticResource ProxyColor}" Opacity="0.16" />
+    <SolidColorBrush x:Key="DirectTintBrush" Color="{StaticResource DirectColor}" Opacity="0.16" />
+    <SolidColorBrush x:Key="BlockedTintBrush" Color="{StaticResource BlockedColor}" Opacity="0.16" />
+    <SolidColorBrush x:Key="AccentTintBrush" Color="{StaticResource AccentColor}" Opacity="0.16" />
+    <SolidColorBrush x:Key="WarningTintBrush" Color="{StaticResource WarningColor}" Opacity="0.16" />
+
+    <!--
+        The specular edge.
+
+        A one-pixel gradient that is brightest at the top-left and fades to nothing by the middle.
+        Real glass catches light on its upper edge, and reproducing that is most of what makes a
+        translucent panel look like a physical surface instead of a rectangle at 60% opacity.
+    -->
+    <LinearGradientBrush x:Key="GlassEdgeBrush" StartPoint="0,0" EndPoint="0.8,1">
+        <GradientStop Color="#40FFFFFF" Offset="0" />
+        <GradientStop Color="#14FFFFFF" Offset="0.35" />
+        <GradientStop Color="#00FFFFFF" Offset="0.75" />
+    </LinearGradientBrush>
+
+    <LinearGradientBrush x:Key="GlassSheenBrush" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Color="#0EFFFFFF" Offset="0" />
+        <GradientStop Color="#00FFFFFF" Offset="0.55" />
+    </LinearGradientBrush>
+
+    <!-- Accent fill with a little depth, for primary actions. -->
+    <LinearGradientBrush x:Key="AccentFillBrush" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Color="#7FA8FF" Offset="0" />
+        <GradientStop Color="#5A85F5" Offset="1" />
+    </LinearGradientBrush>
+
+    <LinearGradientBrush x:Key="AccentFillHoverBrush" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Color="#96BAFF" Offset="0" />
+        <GradientStop Color="#6E95FF" Offset="1" />
+    </LinearGradientBrush>
+
+    <LinearGradientBrush x:Key="ProxyFillBrush" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Color="#54E39B" Offset="0" />
+        <GradientStop Color="#2FC97B" Offset="1" />
+    </LinearGradientBrush>
+
+    <FontFamily x:Key="UiFont">Segoe UI Variable Text, Segoe UI</FontFamily>
+    <FontFamily x:Key="DisplayFont">Segoe UI Variable Display, Segoe UI</FontFamily>
+    <FontFamily x:Key="MonoFont">Cascadia Mono, Consolas</FontFamily>
+
+    <CornerRadius x:Key="CardRadius">14</CornerRadius>
+    <CornerRadius x:Key="ControlRadius">9</CornerRadius>
+
+    <!-- Shared motion vocabulary, so nothing in the app eases differently from anything else. -->
+    <Duration x:Key="FastDuration">0:0:0.13</Duration>
+    <Duration x:Key="MediumDuration">0:0:0.22</Duration>
+    <Duration x:Key="SlowDuration">0:0:0.34</Duration>
+
+</ResourceDictionary>

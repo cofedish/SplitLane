@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
+  <assemblyIdentity version="0.1.0.0" name="SplitLane.Engine" type="win32" />
+
+  <!--
+    asInvoker, not requireAdministrator, even though diverting packets needs administrative rights.
+
+    The engine has two modes that legitimately run unelevated, and a manifest demanding elevation
+    made both of them impossible. The preflight mode exists to tell a user why the divert layer will
+    not start; requiring elevation to ask that question means the one command written for a machine
+    that cannot run the engine cannot itself be run. The no-divert mode runs the control channel and
+    relay with no driver at all, and is how the app is developed and demonstrated on a machine
+    without WinDivert installed.
+
+    In the normal case the process checks its own token at startup and refuses with an actionable
+    message rather than raising a UAC prompt, so "it silently did nothing" is not a state SplitLane
+    can be in. See Program.Main.
+
+    (Note for future edits: an XML comment may not contain two consecutive hyphens, so command-line
+    switches are spelled out in words here rather than quoted literally. Writing them literally
+    produces a manifest that fails to parse and an executable that will not start at all, with only
+    a side-by-side configuration error to explain it.)
+  -->
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v2">
+    <security>
+      <requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v3">
+        <requestedExecutionLevel level="asInvoker" uiAccess="false" />
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <!-- Windows 10 / 11 -->
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}" />
+    </application>
+  </compatibility>
+
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
+    </windowsSettings>
+  </application>
+</assembly>

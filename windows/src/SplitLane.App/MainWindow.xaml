@@ -1,0 +1,373 @@
+<Window x:Class="SplitLane.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        xmlns:infra="clr-namespace:SplitLane.App.Infrastructure"
+        xmlns:vm="clr-namespace:SplitLane.App.ViewModels"
+        xmlns:views="clr-namespace:SplitLane.App.Views"
+        Title="SplitLane"
+        Height="860" Width="1280"
+        MinHeight="660" MinWidth="1020"
+        WindowStartupLocation="CenterScreen"
+        Background="Transparent"
+        TextOptions.TextFormattingMode="Ideal"
+        UseLayoutRounding="True"
+        FontFamily="{StaticResource UiFont}">
+
+    <!--
+        Custom chrome. CaptionHeight carves out a drag strip along the top; everything interactive up
+        there opts back out with IsHitTestVisibleInChrome. GlassFrameThickness of -1 extends the
+        composition frame across the whole client area, which is what lets the Mica backdrop render
+        behind the content rather than only behind a title bar that no longer exists.
+    -->
+    <shell:WindowChrome.WindowChrome>
+        <shell:WindowChrome CaptionHeight="46"
+                            ResizeBorderThickness="6"
+                            CornerRadius="0"
+                            GlassFrameThickness="-1"
+                            UseAeroCaptionButtons="False" />
+    </shell:WindowChrome.WindowChrome>
+
+    <Window.Resources>
+        <!-- Page templates. The host swaps between these and cross-fades the change. -->
+        <DataTemplate DataType="{x:Type vm:OverviewViewModel}">
+            <views:OverviewView />
+        </DataTemplate>
+        <DataTemplate DataType="{x:Type vm:ApplicationsViewModel}">
+            <views:ApplicationsView />
+        </DataTemplate>
+        <DataTemplate DataType="{x:Type vm:ProxyViewModel}">
+            <views:ProxyView />
+        </DataTemplate>
+        <DataTemplate DataType="{x:Type vm:ActivityViewModel}">
+            <views:ActivityView />
+        </DataTemplate>
+        <DataTemplate DataType="{x:Type vm:SettingsViewModel}">
+            <views:SettingsView />
+        </DataTemplate>
+    </Window.Resources>
+
+    <!--
+        The scrim. Everything is drawn on this rather than straight onto the window, so that if the
+        composition backdrop is unavailable — Windows 10, a remote session, transparency switched off
+        in Accessibility — the interface degrades to a dark opaque window instead of an illegible one.
+    -->
+    <Border Background="{StaticResource WindowScrimBrush}" ClipToBounds="True">
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="252" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <!--
+                Ambient colour.
+
+                Two very large, very faint radial washes behind everything. They give the window
+                depth and a sense of light that does not depend on the desktop behind it — which
+                matters, because a composition backdrop over a dark wallpaper is indistinguishable
+                from a flat dark rectangle, and that describes most desktops.
+            -->
+            <Ellipse Grid.Column="0" Grid.ColumnSpan="2"
+                     Width="900" Height="900" HorizontalAlignment="Left" VerticalAlignment="Top"
+                     Margin="-320,-420,0,0" IsHitTestVisible="False">
+                <Ellipse.Fill>
+                    <RadialGradientBrush>
+                        <GradientStop Color="#3D6D9BFF" Offset="0" />
+                        <GradientStop Color="#006D9BFF" Offset="1" />
+                    </RadialGradientBrush>
+                </Ellipse.Fill>
+            </Ellipse>
+
+            <Ellipse Grid.Column="0" Grid.ColumnSpan="2"
+                     Width="840" Height="840" HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                     Margin="0,0,-300,-380" IsHitTestVisible="False">
+                <Ellipse.Fill>
+                    <RadialGradientBrush>
+                        <GradientStop Color="#2B3DDC8C" Offset="0" />
+                        <GradientStop Color="#003DDC8C" Offset="1" />
+                    </RadialGradientBrush>
+                </Ellipse.Fill>
+            </Ellipse>
+
+            <!-- ==== Sidebar ================================================================ -->
+
+            <Border Grid.Column="0" Background="{StaticResource SidebarScrimBrush}"
+                    BorderBrush="#14FFFFFF" BorderThickness="0,0,1,0">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <StackPanel Grid.Row="0" Margin="24,22,24,20">
+                        <StackPanel Orientation="Horizontal">
+                            <Border Width="32" Height="32" CornerRadius="9"
+                                    Background="{StaticResource AccentTintBrush}"
+                                    BorderBrush="{StaticResource GlassEdgeBrush}" BorderThickness="1">
+                                <Grid>
+                                    <Rectangle Width="3" Height="15" RadiusX="1.5" RadiusY="1.5"
+                                               Fill="{StaticResource ProxyBrush}"
+                                               HorizontalAlignment="Center" Margin="-7,0,0,0" />
+                                    <Rectangle Width="3" Height="15" RadiusX="1.5" RadiusY="1.5"
+                                               Fill="{StaticResource DirectBrush}"
+                                               HorizontalAlignment="Center" Margin="7,0,0,0" />
+                                </Grid>
+                            </Border>
+                            <TextBlock Text="SplitLane" FontSize="17.5" FontWeight="SemiBold"
+                                       FontFamily="{StaticResource DisplayFont}"
+                                       Foreground="{StaticResource TextBrush}"
+                                       VerticalAlignment="Center" Margin="12,0,0,0" />
+                        </StackPanel>
+                        <TextBlock Text="Per-application routing for Windows"
+                                   FontSize="11.5" Foreground="{StaticResource TextFaintBrush}"
+                                   TextWrapping="Wrap" Margin="0,12,0,0" />
+                    </StackPanel>
+
+                    <!--
+                        Navigation.
+
+                        Selection drives the page, rather than a Click handler driving it. With a
+                        command on Click, anything that selects an item without clicking it — UI
+                        Automation, a screen reader, the arrow keys inside a radio group — moved the
+                        highlight without changing the page, leaving the sidebar and the content
+                        disagreeing about where you were.
+                    -->
+                    <StackPanel Grid.Row="1" Margin="0,4,0,0"
+                                shell:WindowChrome.IsHitTestVisibleInChrome="True">
+                        <TextBlock Text="ROUTING" Style="{StaticResource SectionTitle}" Margin="27,4,0,9" />
+
+                        <infra:NavButton Style="{StaticResource NavItem}"
+                                         Content="Overview"
+                                         AutomationProperties.AutomationId="NavOverview"
+                                         Icon="{StaticResource IconOverview}"
+                                         IsChecked="{Binding Page, Mode=TwoWay,
+                                                     Converter={StaticResource EnumEquals},
+                                                     ConverterParameter=Overview}" />
+
+                        <infra:NavButton Style="{StaticResource NavItem}"
+                                         Content="Applications"
+                                         AutomationProperties.AutomationId="NavApplications"
+                                         Icon="{StaticResource IconApps}"
+                                         BadgeText="{Binding Applications.ProxiedCount}"
+                                         IsChecked="{Binding Page, Mode=TwoWay,
+                                                     Converter={StaticResource EnumEquals},
+                                                     ConverterParameter=Applications}" />
+
+                        <infra:NavButton Style="{StaticResource NavItem}"
+                                         Content="Proxy"
+                                         AutomationProperties.AutomationId="NavProxy"
+                                         Icon="{StaticResource IconProxy}"
+                                         IsChecked="{Binding Page, Mode=TwoWay,
+                                                     Converter={StaticResource EnumEquals},
+                                                     ConverterParameter=Proxy}" />
+
+                        <TextBlock Text="DIAGNOSTICS" Style="{StaticResource SectionTitle}" Margin="27,20,0,9" />
+
+                        <infra:NavButton Style="{StaticResource NavItem}"
+                                         Content="Activity"
+                                         AutomationProperties.AutomationId="NavActivity"
+                                         Icon="{StaticResource IconActivity}"
+                                         IsChecked="{Binding Page, Mode=TwoWay,
+                                                     Converter={StaticResource EnumEquals},
+                                                     ConverterParameter=Activity}" />
+
+                        <infra:NavButton Style="{StaticResource NavItem}"
+                                         Content="Settings"
+                                         AutomationProperties.AutomationId="NavSettings"
+                                         Icon="{StaticResource IconSettings}"
+                                         IsChecked="{Binding Page, Mode=TwoWay,
+                                                     Converter={StaticResource EnumEquals},
+                                                     ConverterParameter=Settings}" />
+                    </StackPanel>
+
+                    <!-- Engine state, always visible: it is what explains everything else. -->
+                    <Border Grid.Row="2" Margin="16,0,16,16" Padding="15,13"
+                            Background="{StaticResource SurfaceBrush}"
+                            BorderBrush="{StaticResource GlassEdgeBrush}"
+                            BorderThickness="1" CornerRadius="11"
+                            shell:WindowChrome.IsHitTestVisibleInChrome="True">
+                        <StackPanel>
+                            <StackPanel Orientation="Horizontal">
+                                <Grid Width="10" Height="10" VerticalAlignment="Center">
+                                    <!-- A slow pulse, so a healthy engine reads as alive at a glance. -->
+                                    <Ellipse x:Name="Halo" Width="10" Height="10" Opacity="0"
+                                             Fill="{StaticResource ProxyBrush}"
+                                             Visibility="{Binding Overview.IsHealthy,
+                                                          Converter={StaticResource BoolToVisible}}" />
+                                    <Ellipse Width="8" Height="8">
+                                        <Ellipse.Style>
+                                            <Style TargetType="Ellipse">
+                                                <Setter Property="Fill" Value="{StaticResource DirectBrush}" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding Overview.IsHealthy}" Value="True">
+                                                        <Setter Property="Fill" Value="{StaticResource ProxyBrush}" />
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding Overview.IsFaulted}" Value="True">
+                                                        <Setter Property="Fill" Value="{StaticResource BlockedBrush}" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Ellipse.Style>
+                                    </Ellipse>
+                                </Grid>
+
+                                <TextBlock Text="{Binding Overview.StateLabel}"
+                                           AutomationProperties.AutomationId="EngineStateLabel"
+                                           FontSize="12.5" FontWeight="SemiBold"
+                                           Foreground="{StaticResource TextBrush}"
+                                           Margin="10,0,0,0" VerticalAlignment="Center"
+                                           TextTrimming="CharacterEllipsis" />
+                            </StackPanel>
+
+                            <TextBlock Text="{Binding Overview.DriverLabel}"
+                                       FontSize="11" Foreground="{StaticResource TextFaintBrush}"
+                                       Margin="20,5,0,0" TextTrimming="CharacterEllipsis"
+                                       Visibility="{Binding EngineConnected, Converter={StaticResource BoolToVisible}}" />
+                        </StackPanel>
+
+                        <Border.Triggers>
+                            <EventTrigger RoutedEvent="Loaded">
+                                <BeginStoryboard>
+                                    <Storyboard RepeatBehavior="Forever" AutoReverse="True">
+                                        <DoubleAnimation Storyboard.TargetName="Halo"
+                                                         Storyboard.TargetProperty="Opacity"
+                                                         From="0" To="0.4" Duration="0:0:1.7" />
+                                    </Storyboard>
+                                </BeginStoryboard>
+                            </EventTrigger>
+                        </Border.Triggers>
+                    </Border>
+                </Grid>
+            </Border>
+
+            <!-- ==== Content ================================================================ -->
+
+            <Grid Grid.Column="1">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="46" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <!-- Caption strip. The rest of this row is drag surface. -->
+                <StackPanel Grid.Row="0" Orientation="Horizontal" HorizontalAlignment="Right"
+                            VerticalAlignment="Top" Margin="0,7,10,0"
+                            shell:WindowChrome.IsHitTestVisibleInChrome="True">
+                    <Button Style="{StaticResource CaptionButton}" Click="OnMinimise"
+                            AutomationProperties.Name="Minimise"
+                            AutomationProperties.AutomationId="MinimiseButton">
+                        <Path Data="{StaticResource IconMinimise}" Width="10" Height="10" Stretch="Uniform"
+                              Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                    </Button>
+                    <Button Style="{StaticResource CaptionButton}" Click="OnMaximise"
+                            AutomationProperties.Name="Maximise"
+                            AutomationProperties.AutomationId="MaximiseButton">
+                        <Path x:Name="MaximiseGlyph" Data="{StaticResource IconMaximise}"
+                              Width="10" Height="10" Stretch="Uniform"
+                              Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                    </Button>
+                    <Button Style="{StaticResource CloseCaptionButton}" Click="OnClose"
+                            AutomationProperties.Name="Close"
+                            AutomationProperties.AutomationId="CloseButton">
+                        <Path Data="{StaticResource IconClose}" Width="10" Height="10" Stretch="Uniform"
+                              Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+                    </Button>
+                </StackPanel>
+
+                <!-- Header -->
+                <StackPanel Grid.Row="1" Margin="40,4,40,22">
+                    <TextBlock Text="{Binding PageTitle}" Style="{StaticResource PageTitle}" />
+                    <TextBlock Text="{Binding PageSubtitle}" Style="{StaticResource PageSubtitle}" />
+                </StackPanel>
+
+                <!-- Banner -->
+                <Border Grid.Row="2" Margin="40,0,40,18" Padding="16,12" CornerRadius="10"
+                        Visibility="{Binding HasBanner, Converter={StaticResource BoolToVisible}}"
+                        RenderTransformOrigin="0,0.5">
+                    <Border.RenderTransform>
+                        <ScaleTransform x:Name="BannerScale" ScaleY="1" />
+                    </Border.RenderTransform>
+                    <Border.Style>
+                        <Style TargetType="Border">
+                            <Setter Property="Background" Value="{StaticResource AccentTintBrush}" />
+                            <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+                            <Setter Property="BorderThickness" Value="1" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding BannerIsError}" Value="True">
+                                    <Setter Property="Background" Value="{StaticResource BlockedTintBrush}" />
+                                    <Setter Property="BorderBrush" Value="{StaticResource BlockedBrush}" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Border.Style>
+                    <TextBlock Text="{Binding Banner}"
+                               AutomationProperties.AutomationId="Banner"
+                               FontSize="12.5" TextWrapping="Wrap"
+                               Foreground="{StaticResource TextBrush}" />
+                    <Border.Triggers>
+                        <EventTrigger RoutedEvent="Loaded">
+                            <BeginStoryboard>
+                                <Storyboard>
+                                    <DoubleAnimation Storyboard.TargetName="BannerScale"
+                                                     Storyboard.TargetProperty="ScaleY"
+                                                     From="0.7" To="1" Duration="{StaticResource MediumDuration}">
+                                        <DoubleAnimation.EasingFunction>
+                                            <BackEase Amplitude="0.4" EasingMode="EaseOut" />
+                                        </DoubleAnimation.EasingFunction>
+                                    </DoubleAnimation>
+                                    <DoubleAnimation Storyboard.TargetProperty="Opacity"
+                                                     From="0" To="1" Duration="{StaticResource MediumDuration}" />
+                                </Storyboard>
+                            </BeginStoryboard>
+                        </EventTrigger>
+                    </Border.Triggers>
+                </Border>
+
+                <!-- Pages -->
+                <infra:PageHost x:Name="Pages" Grid.Row="3" Margin="40,0,40,0"
+                                Content="{Binding CurrentPage}" />
+
+                <!-- The save bar exists only when there is something to save, so it never nags. -->
+                <Border Grid.Row="4" Padding="40,18"
+                        Background="#33000000"
+                        BorderBrush="#14FFFFFF" BorderThickness="0,1,0,0"
+                        Visibility="{Binding HasUnsavedChanges, Converter={StaticResource BoolToVisible}}">
+                    <Border.RenderTransform>
+                        <TranslateTransform x:Name="SaveBarSlide" Y="0" />
+                    </Border.RenderTransform>
+                    <Grid>
+                        <TextBlock Text="You have unsaved changes."
+                                   VerticalAlignment="Center"
+                                   FontSize="13" Foreground="{StaticResource TextMutedBrush}" />
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                            <Button Content="Discard" Style="{StaticResource QuietButton}"
+                                    AutomationProperties.AutomationId="DiscardButton"
+                                    Command="{Binding DiscardCommand}" />
+                            <Button Content="Save changes" Style="{StaticResource PrimaryButton}"
+                                    AutomationProperties.AutomationId="SaveButton"
+                                    Command="{Binding SaveCommand}" Margin="12,0,0,0" />
+                        </StackPanel>
+                    </Grid>
+                    <Border.Triggers>
+                        <EventTrigger RoutedEvent="Loaded">
+                            <BeginStoryboard>
+                                <Storyboard>
+                                    <DoubleAnimation Storyboard.TargetName="SaveBarSlide"
+                                                     Storyboard.TargetProperty="Y"
+                                                     From="70" To="0" Duration="{StaticResource MediumDuration}">
+                                        <DoubleAnimation.EasingFunction>
+                                            <CubicEase EasingMode="EaseOut" />
+                                        </DoubleAnimation.EasingFunction>
+                                    </DoubleAnimation>
+                                </Storyboard>
+                            </BeginStoryboard>
+                        </EventTrigger>
+                    </Border.Triggers>
+                </Border>
+            </Grid>
+        </Grid>
+    </Border>
+</Window>

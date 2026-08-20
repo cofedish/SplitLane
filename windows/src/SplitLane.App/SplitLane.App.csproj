@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The unprivileged half of SplitLane.
+
+    It runs as the interactive user and deliberately does not request elevation: everything that
+    needs administrative rights lives behind the engine's control channel. An app that asked for
+    elevation would be an app whose entire UI surface runs as administrator, which is a much larger
+    thing to get right than a named pipe with nine message kinds.
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <RootNamespace>SplitLane.App</RootNamespace>
+    <AssemblyName>SplitLane</AssemblyName>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <WarningsNotAsErrors>CS1591</WarningsNotAsErrors>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Resources\SplitLane.ico</ApplicationIcon>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SplitLane.Core\SplitLane.Core.csproj" />
+  </ItemGroup>
+
+  <!--
+    ProtectedData needs no package reference here: WPF pulls in Microsoft.WindowsDesktop.App, which
+    already carries it. The engine, which is not a desktop app, does need the package.
+  -->
+
+</Project>

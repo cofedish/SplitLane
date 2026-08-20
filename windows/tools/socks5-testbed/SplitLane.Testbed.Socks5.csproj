@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    A real SOCKS5 server, in-process.
+
+    The macOS project runs its integration tests against a SOCKS5 server in Docker. That works, but
+    it makes the tests conditional on a daemon being up, which in practice means they are skipped.
+    This is a few hundred lines of managed code with no dependencies, so the integration tests run
+    on every `dotnet test` with nothing to install and nothing to remember to start.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>SplitLane.Testbed.Socks5</RootNamespace>
+    <AssemblyName>SplitLane.Testbed.Socks5</AssemblyName>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <WarningsNotAsErrors>CS1591</WarningsNotAsErrors>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\SplitLane.Core\SplitLane.Core.csproj" />
+  </ItemGroup>
+
+</Project>

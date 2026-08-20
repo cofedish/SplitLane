@@ -1,0 +1,13 @@
+# Build output
+bin/
+obj/
+artifacts/
+
+# The WinDivert driver is fetched, never committed. See tools/fetch-windivert.ps1 and ADR W-0001:
+# vendoring a third-party kernel driver is a supply-chain decision that should be made explicitly
+# rather than inherited by everyone who clones the repository.
+runtime/
+
+# Local solution state
+*.user
+.vs/

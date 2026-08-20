@@ -1,0 +1,21 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/SplitLane.App/SplitLane.App.csproj">
+      <Platform Project="x64" />
+    </Project>
+    <Project Path="src/SplitLane.Core/SplitLane.Core.csproj" />
+    <Project Path="src/SplitLane.Engine/SplitLane.Engine.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/SplitLane.Core.Tests/SplitLane.Core.Tests.csproj" />
+    <Project Path="tests/SplitLane.Engine.Tests/SplitLane.Engine.Tests.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/tools/" />
+  <Folder Name="/tools/socks5-testbed/">
+    <Project Path="tools/socks5-testbed/SplitLane.Testbed.Socks5.csproj" />
+  </Folder>
+</Solution>

@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Pure routing core. The macOS SplitLaneCore builds and tests with `swift build` alone, with no
+    Xcode; this is the same promise on Windows. It targets plain `net10.0` (not `-windows`), takes
+    no package references, and P/Invokes nothing.
+
+    If a WinDivert reference or a Win32 P/Invoke ever appears in this project, the boundary that
+    keeps routing exhaustively testable has been broken.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>SplitLane.Core</RootNamespace>
+    <AssemblyName>SplitLane.Core</AssemblyName>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <!-- Missing XML docs stay a visible warning, but do not block a build mid-refactor. -->
+    <WarningsNotAsErrors>CS1591</WarningsNotAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="SplitLane.Core.Tests" />
+    <InternalsVisibleTo Include="SplitLane.Engine" />
+    <InternalsVisibleTo Include="SplitLane.Engine.Tests" />
+  </ItemGroup>
+
+</Project>

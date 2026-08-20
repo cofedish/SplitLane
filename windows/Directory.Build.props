@@ -1,0 +1,29 @@
+<Project>
+
+  <!--
+    Shared build settings for every SplitLane for Windows project.
+
+    Warnings are errors on purpose: the macOS project's Definition of Done requires "zero new
+    warnings", and the cheapest way to keep that true is to make a warning fail the build.
+  -->
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
+    <!--
+      InvariantGlobalization is deliberately NOT set. WPF resolves FrameworkElement.Language from
+      the current culture at load time and throws when only the invariant culture exists. Where
+      culture-independence actually matters — path comparison, protocol parsing, log timestamps —
+      the code says so explicitly with Ordinal or InvariantCulture rather than relying on a
+      process-wide switch.
+    -->
+    <Product>SplitLane</Product>
+    <Company>SplitLane</Company>
+    <Version>0.1.0</Version>
+    <NeutralLanguage>en</NeutralLanguage>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+</Project>

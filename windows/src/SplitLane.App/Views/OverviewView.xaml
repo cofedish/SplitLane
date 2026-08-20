@@ -1,0 +1,245 @@
+<UserControl x:Class="SplitLane.App.Views.OverviewView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <UserControl.Resources>
+        <!--
+            A counter with no engine behind it is unknown, not zero, and it must not be shown as a
+            number. At display size an em-dash is a horizontal rule, so the placeholder is dropped to
+            body size and muted — it reads as "nothing here yet" rather than as a broken bar.
+        -->
+        <Style x:Key="Metric" TargetType="TextBlock" BasedOn="{StaticResource MetricValue}">
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding HasStatus}" Value="False">
+                    <Setter Property="FontSize" Value="15" />
+                    <Setter Property="Foreground" Value="{StaticResource TextFaintBrush}" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+    </UserControl.Resources>
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,0,10,0">
+        <StackPanel Margin="0,0,0,28">
+
+            <!-- ==== State ================================================================== -->
+
+            <Border Style="{StaticResource Card}" Padding="24">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                        <StackPanel Orientation="Horizontal">
+                            <Border CornerRadius="6" Padding="10,4" VerticalAlignment="Center">
+                                <Border.Style>
+                                    <Style TargetType="Border">
+                                        <Setter Property="Background" Value="{StaticResource DirectTintBrush}" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsHealthy}" Value="True">
+                                                <Setter Property="Background" Value="{StaticResource ProxyTintBrush}" />
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding IsFaulted}" Value="True">
+                                                <Setter Property="Background" Value="{StaticResource BlockedTintBrush}" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Border.Style>
+                                <TextBlock Text="{Binding StateLabel}" FontSize="13" FontWeight="SemiBold">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Foreground" Value="{StaticResource DirectBrush}" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsHealthy}" Value="True">
+                                                    <Setter Property="Foreground" Value="{StaticResource ProxyBrush}" />
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding IsFaulted}" Value="True">
+                                                    <Setter Property="Foreground" Value="{StaticResource BlockedBrush}" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </Border>
+
+                            <TextBlock Text="{Binding UptimeLabel}" Style="{StaticResource MonoText}"
+                                       VerticalAlignment="Center" Margin="12,0,0,0"
+                                       Visibility="{Binding HasStatus, Converter={StaticResource BoolToVisible}}" />
+                        </StackPanel>
+
+                        <TextBlock Text="{Binding StateDetail}"
+                                   AutomationProperties.AutomationId="StateDetail"
+                                   Style="{StaticResource BodyText}"
+                                   MaxWidth="560" HorizontalAlignment="Left" Margin="0,12,0,0" />
+                    </StackPanel>
+
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button Content="Stop routing" Style="{StaticResource QuietButton}"
+                                AutomationProperties.AutomationId="StopRoutingButton"
+                                Command="{Binding StopCommand}" />
+                        <Button Content="Start routing" Style="{StaticResource PrimaryButton}"
+                                AutomationProperties.AutomationId="StartRoutingButton"
+                                Command="{Binding StartCommand}" Margin="10,0,0,0" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <!-- ==== Master switch ========================================================== -->
+
+            <Border Style="{StaticResource Card}" Margin="0,16,0,0">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel Grid.Column="0">
+                        <TextBlock Text="Route selected applications" Style="{StaticResource CardTitle}" />
+                        <TextBlock Style="{StaticResource BodyText}" Margin="0,6,0,0" MaxWidth="620"
+                                   HorizontalAlignment="Left"
+                                   Text="Switch this off to send every application DIRECT while leaving the engine installed and running. That is a different state from stopping the engine, and SplitLane will say which one it is in." />
+                    </StackPanel>
+
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding RoutingStateLabel}"
+                                   FontSize="13" FontWeight="SemiBold"
+                                   Foreground="{StaticResource TextMutedBrush}"
+                                   VerticalAlignment="Center" Margin="0,0,12,0" />
+                        <ToggleButton Style="{StaticResource Switch}"
+                                      AutomationProperties.AutomationId="RoutingSwitch"
+                                      IsChecked="{Binding IsRoutingEnabled}" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <!-- ==== Counters =============================================================== -->
+
+            <TextBlock Text="SINCE START" Style="{StaticResource SectionTitle}" Margin="2,26,0,10" />
+
+            <UniformGrid Columns="4">
+                <Border Style="{StaticResource Card}" Margin="0,0,8,0">
+                    <StackPanel>
+                        <TextBlock Text="{Binding ProxiedCount}" Style="{StaticResource Metric}"
+                                   AutomationProperties.AutomationId="ProxiedCount" />
+                        <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                            <Ellipse Width="6" Height="6" Fill="{StaticResource ProxyBrush}"
+                                     VerticalAlignment="Center" Margin="0,0,8,0" />
+                            <TextBlock Text="Proxied" Style="{StaticResource MetricLabel}" Margin="0" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource Card}" Margin="8,0">
+                    <StackPanel>
+                        <TextBlock Text="{Binding DirectCount}" Style="{StaticResource Metric}" />
+                        <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                            <Ellipse Width="6" Height="6" Fill="{StaticResource DirectBrush}"
+                                     VerticalAlignment="Center" Margin="0,0,8,0" />
+                            <TextBlock Text="Direct" Style="{StaticResource MetricLabel}" Margin="0" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource Card}" Margin="8,0"
+                        ToolTip="Selected-application UDP, refused so it cannot bypass the proxy.">
+                    <StackPanel>
+                        <TextBlock Text="{Binding BlockedCount}" Style="{StaticResource Metric}" />
+                        <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                            <Ellipse Width="6" Height="6" Fill="{StaticResource BlockedBrush}"
+                                     VerticalAlignment="Center" Margin="0,0,8,0" />
+                            <TextBlock Text="Blocked" Style="{StaticResource MetricLabel}" Margin="0" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource Card}" Margin="8,0,0,0">
+                    <StackPanel>
+                        <TextBlock Text="{Binding ActiveCount}" Style="{StaticResource Metric}" />
+                        <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                            <Ellipse Width="6" Height="6" Fill="{StaticResource AccentBrush}"
+                                     VerticalAlignment="Center" Margin="0,0,8,0" />
+                            <TextBlock Text="Relaying now" Style="{StaticResource MetricLabel}" Margin="0" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+            </UniformGrid>
+
+            <!-- ==== Detail ================================================================= -->
+
+            <Border Style="{StaticResource Card}" Margin="0,16,0,0">
+                <StackPanel>
+                    <Grid Margin="0,0,0,14">
+                        <TextBlock Text="Engine" Style="{StaticResource CardTitle}" />
+                        <Button Content="Reset counters" Style="{StaticResource QuietButton}"
+                                HorizontalAlignment="Right"
+                                AutomationProperties.AutomationId="ResetCountersButton"
+                                Command="{Binding ResetCommand}" />
+                    </Grid>
+
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0">
+                            <TextBlock Text="Relayed" Style="{StaticResource FieldLabel}" />
+                            <TextBlock Text="{Binding TransferredLabel}" Style="{StaticResource MonoText}"
+                                       Foreground="{StaticResource TextBrush}" />
+                        </StackPanel>
+
+                        <StackPanel Grid.Column="1">
+                            <TextBlock Text="Redirect listener" Style="{StaticResource FieldLabel}" />
+                            <TextBlock Text="{Binding RedirectPortLabel}" Style="{StaticResource MonoText}"
+                                       Foreground="{StaticResource TextBrush}" />
+                        </StackPanel>
+
+                        <StackPanel Grid.Column="2">
+                            <TextBlock Text="Divert driver" Style="{StaticResource FieldLabel}" />
+                            <TextBlock Text="{Binding DriverLabel}" Style="{StaticResource MonoText}"
+                                       Foreground="{StaticResource TextBrush}" />
+                        </StackPanel>
+                    </Grid>
+
+                    <Border Background="{StaticResource BlockedTintBrush}" CornerRadius="7"
+                            Padding="13,10" Margin="0,16,0,0"
+                            Visibility="{Binding HasLastError, Converter={StaticResource BoolToVisible}}">
+                        <TextBlock Text="{Binding LastError}" TextWrapping="Wrap" FontSize="12.5"
+                                   Foreground="{StaticResource TextBrush}" />
+                    </Border>
+                </StackPanel>
+            </Border>
+
+            <!-- ==== The promise ============================================================ -->
+
+            <Border Style="{StaticResource Card}" Margin="0,16,0,0">
+                <StackPanel>
+                    <TextBlock Text="What SplitLane will not do" Style="{StaticResource CardTitle}" />
+
+                    <StackPanel Margin="0,12,0,0">
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,9">
+                            <Ellipse Width="5" Height="5" Fill="{StaticResource ProxyBrush}"
+                                     VerticalAlignment="Top" Margin="0,7,10,0" />
+                            <TextBlock Style="{StaticResource BodyText}" MaxWidth="700" HorizontalAlignment="Left"
+                                       Text="A selected application never silently falls back to DIRECT. If the proxy is unreachable the connection fails and Activity says why." />
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,9">
+                            <Ellipse Width="5" Height="5" Fill="{StaticResource ProxyBrush}"
+                                     VerticalAlignment="Top" Margin="0,7,10,0" />
+                            <TextBlock Style="{StaticResource BodyText}" MaxWidth="700" HorizontalAlignment="Left"
+                                       Text="A selected application's UDP is refused rather than let out. QUIC fails closed so the application falls back to TCP, which is proxied." />
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal">
+                            <Ellipse Width="5" Height="5" Fill="{StaticResource WarningBrush}"
+                                     VerticalAlignment="Top" Margin="0,7,10,0" />
+                            <TextBlock Style="{StaticResource BodyText}" MaxWidth="700" HorizontalAlignment="Left"
+                                       Text="DNS is not proxied. Names are resolved by Windows before SplitLane sees the connection, so an observer still learns which hosts a proxied application contacts." />
+                        </StackPanel>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

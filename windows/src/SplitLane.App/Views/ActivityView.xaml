@@ -1,0 +1,140 @@
+<UserControl x:Class="SplitLane.App.Views.ActivityView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:SplitLane.App.ViewModels">
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <Grid Grid.Row="0" Margin="0,0,10,14">
+            <CheckBox Style="{StaticResource Check}" Content="Failures only"
+                      VerticalAlignment="Center"
+                      AutomationProperties.AutomationId="FailuresOnly"
+                      IsChecked="{Binding ShowFailuresOnly}" />
+            <Button Content="Refresh" Style="{StaticResource QuietButton}"
+                    HorizontalAlignment="Right"
+                    AutomationProperties.AutomationId="RefreshActivityButton"
+                    Command="{Binding RefreshCommand}" />
+        </Grid>
+
+        <!-- Empty state -->
+        <Border Grid.Row="1" Style="{StaticResource Card}" Padding="40" VerticalAlignment="Top"
+                Margin="0,0,10,0"
+                Visibility="{Binding IsEmpty, Converter={StaticResource BoolToVisible}}">
+            <StackPanel HorizontalAlignment="Center">
+                <TextBlock Text="Nothing to show yet" FontSize="17" FontWeight="SemiBold"
+                           FontFamily="{StaticResource DisplayFont}"
+                           Foreground="{StaticResource TextBrush}" HorizontalAlignment="Center" />
+                <TextBlock Text="{Binding EmptyMessage}" Style="{StaticResource BodyText}"
+                           AutomationProperties.AutomationId="ActivityEmptyMessage"
+                           MaxWidth="460" TextAlignment="Center" Margin="0,10,0,0"
+                           HorizontalAlignment="Center" />
+            </StackPanel>
+        </Border>
+
+        <Border Grid.Row="1" Style="{StaticResource Card}" Padding="0" Margin="0,0,10,0"
+                Visibility="{Binding IsEmpty, Converter={StaticResource BoolToCollapsed}}">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+
+                <!-- Column headings -->
+                <Border Grid.Row="0" Background="{StaticResource SurfaceRaisedBrush}"
+                        CornerRadius="10,10,0,0" Padding="18,11">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="72" />
+                            <ColumnDefinition Width="84" />
+                            <ColumnDefinition Width="1.4*" />
+                            <ColumnDefinition Width="1.8*" />
+                            <ColumnDefinition Width="1.1*" />
+                            <ColumnDefinition Width="1.2*" />
+                            <ColumnDefinition Width="70" />
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Grid.Column="0" Text="TIME" Style="{StaticResource SectionTitle}" />
+                        <TextBlock Grid.Column="1" Text="LANE" Style="{StaticResource SectionTitle}" />
+                        <TextBlock Grid.Column="2" Text="APPLICATION" Style="{StaticResource SectionTitle}" />
+                        <TextBlock Grid.Column="3" Text="DESTINATION" Style="{StaticResource SectionTitle}" />
+                        <TextBlock Grid.Column="4" Text="STATE" Style="{StaticResource SectionTitle}" />
+                        <TextBlock Grid.Column="5" Text="TRANSFERRED" Style="{StaticResource SectionTitle}" />
+                        <TextBlock Grid.Column="6" Text="TOOK" Style="{StaticResource SectionTitle}" />
+                    </Grid>
+                </Border>
+
+                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                    <ItemsControl ItemsSource="{Binding VisibleConnections}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate DataType="{x:Type vm:ConnectionRowViewModel}">
+                                <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1"
+                                        Padding="18,12" ToolTip="{Binding Tooltip}">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="72" />
+                                            <ColumnDefinition Width="84" />
+                                            <ColumnDefinition Width="1.4*" />
+                                            <ColumnDefinition Width="1.8*" />
+                                            <ColumnDefinition Width="1.1*" />
+                                            <ColumnDefinition Width="1.2*" />
+                                            <ColumnDefinition Width="70" />
+                                        </Grid.ColumnDefinitions>
+
+                                        <TextBlock Grid.Column="0" Text="{Binding Time}"
+                                                   Style="{StaticResource MonoText}" VerticalAlignment="Center" />
+
+                                        <Border Grid.Column="1" Style="{StaticResource Badge}"
+                                                HorizontalAlignment="Left" Margin="0,0,12,0"
+                                                Background="{Binding LaneLabel, Converter={StaticResource LaneTint}}">
+                                            <TextBlock Text="{Binding LaneLabel}" Style="{StaticResource BadgeText}"
+                                                       Foreground="{Binding LaneLabel, Converter={StaticResource LaneBrush}}" />
+                                        </Border>
+
+                                        <TextBlock Grid.Column="2" Text="{Binding ApplicationName}"
+                                                   FontSize="13" Foreground="{StaticResource TextBrush}"
+                                                   VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                                                   Margin="0,0,12,0" />
+
+                                        <TextBlock Grid.Column="3" Text="{Binding Destination}"
+                                                   Style="{StaticResource MonoText}" VerticalAlignment="Center"
+                                                   TextTrimming="CharacterEllipsis" Margin="0,0,12,0" />
+
+                                        <TextBlock Grid.Column="4" Text="{Binding StateLabel}"
+                                                   FontSize="12.5" VerticalAlignment="Center"
+                                                   TextTrimming="CharacterEllipsis" Margin="0,0,12,0">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Foreground" Value="{StaticResource TextMutedBrush}" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsFailure}" Value="True">
+                                                            <Setter Property="Foreground" Value="{StaticResource BlockedBrush}" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+
+                                        <TextBlock Grid.Column="5" Text="{Binding TransferLabel}"
+                                                   Style="{StaticResource MonoText}" VerticalAlignment="Center" />
+
+                                        <TextBlock Grid.Column="6" Text="{Binding DurationLabel}"
+                                                   Style="{StaticResource MonoText}" VerticalAlignment="Center" />
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+            </Grid>
+        </Border>
+
+        <TextBlock Grid.Row="2" Text="{Binding FooterNote}" Style="{StaticResource BodyText}"
+                   FontSize="12" MaxWidth="760" HorizontalAlignment="Left"
+                   Margin="2,16,10,20" />
+    </Grid>
+</UserControl>

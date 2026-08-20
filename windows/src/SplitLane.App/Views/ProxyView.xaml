@@ -1,0 +1,189 @@
+<UserControl x:Class="SplitLane.App.Views.ProxyView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,0,10,0">
+        <StackPanel Margin="0,0,0,28" MaxWidth="820" HorizontalAlignment="Left">
+
+            <!-- ==== Endpoint =============================================================== -->
+
+            <Border Style="{StaticResource Card}">
+                <StackPanel>
+                    <Grid>
+                        <TextBlock Text="Upstream" Style="{StaticResource CardTitle}" />
+                        <Border Style="{StaticResource Badge}" HorizontalAlignment="Right"
+                                Background="{StaticResource AccentTintBrush}">
+                            <TextBlock Text="SOCKS5" Style="{StaticResource BadgeText}"
+                                       Foreground="{StaticResource AccentBrush}" />
+                        </Border>
+                    </Grid>
+
+                    <Grid Margin="0,18,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="16" />
+                            <ColumnDefinition Width="140" />
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0">
+                            <TextBlock Text="Host" Style="{StaticResource FieldLabel}" />
+                            <TextBox Style="{StaticResource Field}"
+                                     AutomationProperties.AutomationId="ProxyHost"
+                                     Text="{Binding Host, UpdateSourceTrigger=PropertyChanged}" />
+                        </StackPanel>
+
+                        <StackPanel Grid.Column="2">
+                            <TextBlock Text="Port" Style="{StaticResource FieldLabel}" />
+                            <TextBox Style="{StaticResource Field}"
+                                     AutomationProperties.AutomationId="ProxyPort"
+                                     Text="{Binding Port, UpdateSourceTrigger=PropertyChanged}" />
+                        </StackPanel>
+                    </Grid>
+
+                    <Grid Margin="0,16,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="16" />
+                            <ColumnDefinition Width="140" />
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0">
+                            <TextBlock Text="Name" Style="{StaticResource FieldLabel}" />
+                            <TextBox Style="{StaticResource Field}"
+                                     AutomationProperties.AutomationId="ProxyName"
+                                     Text="{Binding DisplayName, UpdateSourceTrigger=PropertyChanged}" />
+                        </StackPanel>
+
+                        <StackPanel Grid.Column="2">
+                            <TextBlock Text="Timeout (s)" Style="{StaticResource FieldLabel}" />
+                            <TextBox Style="{StaticResource Field}"
+                                     AutomationProperties.AutomationId="ProxyTimeout"
+                                     Text="{Binding TimeoutSeconds, UpdateSourceTrigger=PropertyChanged}"
+                                     ToolTip="Budget for TCP connect plus the whole SOCKS5 handshake. From the application's point of view these are one wait." />
+                        </StackPanel>
+                    </Grid>
+
+                    <Grid Margin="0,20,0,0">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <TextBlock Text="Lane points at" Style="{StaticResource FieldLabel}"
+                                       Margin="0,0,10,0" VerticalAlignment="Center" />
+                            <TextBlock Text="{Binding EndpointSummary}" Style="{StaticResource MonoText}"
+                                       AutomationProperties.AutomationId="EndpointSummary"
+                                       Foreground="{StaticResource TextBrush}" VerticalAlignment="Center" />
+                        </StackPanel>
+
+                        <Button Content="Test connection" Style="{StaticResource SecondaryButton}"
+                                HorizontalAlignment="Right"
+                                AutomationProperties.AutomationId="TestProxyButton"
+                                Command="{Binding TestCommand}"
+                                ToolTip="Runs inside the engine, not here. The app's own connection to the proxy proves nothing about the engine's." />
+                    </Grid>
+
+                    <Border CornerRadius="7" Padding="13,10" Margin="0,14,0,0"
+                            Visibility="{Binding HasTestResult, Converter={StaticResource BoolToVisible}}">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Background" Value="{StaticResource ProxyTintBrush}" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding TestFailed}" Value="True">
+                                        <Setter Property="Background" Value="{StaticResource BlockedTintBrush}" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
+                        <TextBlock Text="{Binding TestResult}" TextWrapping="Wrap" FontSize="12.5"
+                                   AutomationProperties.AutomationId="TestResult"
+                                   Foreground="{StaticResource TextBrush}" />
+                    </Border>
+                </StackPanel>
+            </Border>
+
+            <!-- ==== Authentication ========================================================== -->
+
+            <Border Style="{StaticResource Card}" Margin="0,16,0,0">
+                <StackPanel>
+                    <Grid>
+                        <StackPanel>
+                            <TextBlock Text="Authentication" Style="{StaticResource CardTitle}" />
+                            <TextBlock Style="{StaticResource BodyText}" Margin="0,6,0,0" MaxWidth="560"
+                                       HorizontalAlignment="Left"
+                                       Text="Username and password, RFC 1929. The password is encrypted for this machine and stored outside the configuration file — SplitLane can tell you one exists, never what it is." />
+                        </StackPanel>
+                        <ToggleButton Style="{StaticResource Switch}" HorizontalAlignment="Right"
+                                      VerticalAlignment="Top"
+                                      AutomationProperties.AutomationId="RequiresAuthSwitch"
+                                      IsChecked="{Binding RequiresAuthentication}" />
+                    </Grid>
+
+                    <StackPanel Margin="0,18,0,0"
+                                IsEnabled="{Binding RequiresAuthentication}">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="16" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Text="Username" Style="{StaticResource FieldLabel}" />
+                                <TextBox Style="{StaticResource Field}"
+                                         AutomationProperties.AutomationId="ProxyUsername"
+                                         Text="{Binding Username, UpdateSourceTrigger=PropertyChanged}" />
+                            </StackPanel>
+
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Text="Password" Style="{StaticResource FieldLabel}" />
+                                <PasswordBox Style="{StaticResource PasswordField}"
+                                             AutomationProperties.AutomationId="ProxyPassword"
+                                             x:Name="PasswordEntry"
+                                             PasswordChanged="OnPasswordChanged" />
+                            </StackPanel>
+                        </Grid>
+
+                        <TextBlock Text="{Binding CredentialStatus}" Style="{StaticResource BodyText}"
+                                   FontSize="12" Margin="0,10,0,0" />
+
+                        <Border Background="{StaticResource WarningTintBrush}" CornerRadius="7"
+                                Padding="13,10" Margin="0,14,0,0"
+                                Visibility="{Binding PlaintextWarningVisible, Converter={StaticResource BoolToVisible}}">
+                            <TextBlock TextWrapping="Wrap" FontSize="12.5"
+                                       Foreground="{StaticResource TextBrush}"
+                                       Text="This proxy is not on this machine. SOCKS5 sends the username and password unencrypted, so they will cross the network in the clear." />
+                        </Border>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <!-- ==== Behaviour ============================================================== -->
+
+            <Border Style="{StaticResource Card}" Margin="0,16,0,0">
+                <StackPanel>
+                    <TextBlock Text="Behaviour" Style="{StaticResource CardTitle}" />
+
+                    <Grid Margin="0,16,0,0">
+                        <StackPanel MaxWidth="600" HorizontalAlignment="Left">
+                            <TextBlock Text="Send hostnames to the proxy" FontSize="13"
+                                       Foreground="{StaticResource TextBrush}" />
+                            <TextBlock Style="{StaticResource BodyText}" Margin="0,5,0,0"
+                                       Text="When SplitLane knows the name a destination was resolved from, it sends the name rather than the address, so the proxy resolves it from its own location. Without this, a CDN gives you an edge node chosen for where you are instead of where the proxy is." />
+                        </StackPanel>
+                        <ToggleButton Style="{StaticResource Switch}" HorizontalAlignment="Right"
+                                      VerticalAlignment="Top"
+                                      AutomationProperties.AutomationId="PreferHostnamesSwitch"
+                                      IsChecked="{Binding PreferHostnames}" />
+                    </Grid>
+
+                    <Border Background="{StaticResource SurfaceRaisedBrush}" CornerRadius="7"
+                            Padding="14,12" Margin="0,18,0,0">
+                        <StackPanel>
+                            <TextBlock Text="Fail closed" FontSize="13" FontWeight="SemiBold"
+                                       Foreground="{StaticResource TextBrush}" />
+                            <TextBlock Style="{StaticResource BodyText}" Margin="0,6,0,0"
+                                       Text="A selected application whose proxy is unreachable gets a failed connection, not a working one that quietly went direct. There is no setting for this, because a silent fallback is a leak you cannot see — which is the failure SplitLane exists to prevent." />
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>
