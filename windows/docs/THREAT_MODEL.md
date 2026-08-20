@@ -192,40 +192,33 @@ not, because "we tried it" is not a result.
 - The packet layer captures, rewrites and reinjects. WinDivert **accepted** every injection —
   `send failures 0` across every run.
 
-**Still not working:**
+**Still not working, but much more precisely:**
 
-The rewritten loopback packet never arrives at the redirect listener. The application's SYN is
-redirected (ten packets over twenty seconds — retransmissions), the driver accepts the injection
-without error, and nothing is ever accepted on the listening socket. The connection then fails, which
-is at least the correct direction to fail in: the selected application got a dead connection rather
-than a silent DIRECT leak.
+A selected application's connection does not complete. What the trace established, in order:
 
-Both injection shapes were tried: outbound with the loopback flag set, and inbound on interface 1.
-Neither delivered. Since `WinDivertSend` reports success in both cases, the packet is being discarded
-by the stack after injection, which points at the rewritten packet itself or at the injection path
-rather than at the API call.
+1. **Loopback shape (`--redirect-loopback`, the default): the injected packet never reaches the
+   stack at all.** The trace sniffer on the redirect port saw nothing, the application's SYN
+   retransmitted for twenty seconds, and the connection timed out. Both injection directions were
+   tried. Windows appears not to accept an injected packet onto the loopback path.
 
-Both next steps are now built and are waiting on an elevated run:
+2. **Direction flipping was the mistake, not the addresses.** Asserting a direction — flipping a
+   redirected packet to inbound because "it is going to a socket on this machine" — produces a packet
+   WinDivert accepts and the stack discards. Leaving the direction exactly as captured and rewriting
+   only the addresses lets the stack route it, which is what routing is for: a packet addressed to
+   the machine's own address loops back on its own.
 
-1. **A trace sniffer** on the redirect port (`--trace`), which reports what the stack actually
-   carries. Everything known so far is inferred from counters, and the two possible failures need
-   opposite investigations: a redirected SYN that appears on the port means the injection worked and
-   the listening socket is at fault; one that never appears means the injection is discarded.
-2. **A second redirect shape** (`--redirect-local`), which leaves the source address alone and sends
-   the packet to the machine's own address instead of loopback. If Windows' loopback fast path is
-   what rejects injected packets — the leading hypothesis — this avoids it entirely. The cost is that
-   the listener has to accept on all local addresses rather than loopback only, which weakens W-5 to
-   "a port that accepts and instantly closes" rather than "a port unreachable from the network".
+3. **With that corrected, the local-address shape (`--redirect-local`) delivers.** The packet now
+   reaches the stack and the stack answers — the trace shows real responses on the redirect port and
+   the application fails in 70 milliseconds instead of timing out after twenty seconds.
 
-Run both with `tools/verify-divert.ps1 -Mode loopback -Trace` and `-Mode local -Trace`. The script
-does the whole setup and reports a verdict from the upstream side.
+4. **The handshake still does not complete.** The response is a RST from the listener's port back to
+   the application. The listener is confirmed bound and listening (`netstat` shows
+   `0.0.0.0:<port> LISTENING`), so a SYN reaching it should be answered with SYN-ACK, not RST.
 
-If neither delivers, the conclusion is that packet-level redirection to a local socket is not viable
-on current Windows without a kernel callout driver of our own, and ADR W-0001 goes back for review.
-
-**So the honest status is unchanged in substance and much narrower in scope**: the divert layer is
-implemented, compiled, unit-tested, and now driver-exercised end to end up to the final loopback hop,
-which does not work. Everything before that hop is confirmed working on live traffic.
+The remaining question is what the stack does with a segment whose source and destination are the
+same local address. Answering it properly needs a packet capture — `pktmon` or Wireshark on the
+loopback adapter — rather than another round of inference from counters. Everything before that point
+is now confirmed working on live traffic.
 
 ## Bugs the live run found
 

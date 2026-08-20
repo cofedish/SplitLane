@@ -510,16 +510,25 @@ public sealed class DivertPipeline : IAsyncDisposable
         {
             if (RedirectRewriter.TryRedirectToListener(packet, _listenerPort, UseLoopbackRedirect))
             {
-                // The destination is now a socket on this machine, so the packet is injected
-                // INBOUND rather than sent outbound: outbound injection means "hand this to the
-                // routing stack to send", and there is nothing left to send it to.
-                address.Outbound = false;
-
                 if (UseLoopbackRedirect)
                 {
+                    // Loopback shape: both endpoints are 127.0.0.1, so the packet is placed on the
+                    // loopback interface and delivered inbound. Observed not to arrive.
+                    address.Outbound = false;
                     address.Loopback = true;
                     address.Network.IfIdx = LoopbackInterfaceIndex;
                     address.Network.SubIfIdx = 0;
+                }
+                else
+                {
+                    // Local-address shape: the destination is this machine's own address, and the
+                    // packet is left OUTBOUND so the routing stack handles it the way it handles any
+                    // locally-generated packet addressed to the machine itself - by looping it back.
+                    //
+                    // Flipping it to inbound was tried first and did not arrive either. Handing the
+                    // stack a packet to route, rather than asserting where in the stack it belongs,
+                    // asks less of assumptions about WinDivert's injection points.
+                    address.Loopback = false;
                 }
                 Interlocked.Increment(ref _redirected);
                 return PacketAction.Rewritten;
@@ -559,10 +568,11 @@ public sealed class DivertPipeline : IAsyncDisposable
             return PacketAction.Drop;
         }
 
-        // The packet is no longer loopback traffic: it now claims to come from the real destination
-        // and is delivered inbound to the application's socket.
-        address.Loopback = false;
-        address.Outbound = false;
+        // The direction flags are left exactly as captured, and that is the whole lesson of this
+        // path. Asserting a direction - flipping the reply to inbound because "it is going to the
+        // application" - produced a packet the stack accepted and discarded. Rewriting only the
+        // addresses and handing it back the way it arrived lets the stack route it, which is what it
+        // is for: a packet addressed to this machine's own address loops back on its own.
         return PacketAction.Rewritten;
     }
 

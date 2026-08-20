@@ -51,6 +51,27 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# Whether this session can already do the privileged parts itself.
+#
+# Raising a UAC prompt is not always possible. With PromptOnSecureDesktop set - the default - the
+# consent dialog is drawn on the secure desktop, and a full-screen application in front of it means
+# the prompt is never seen and the launch silently does nothing. Running this from an elevated
+# terminal sidesteps that entirely, so the script has to work both ways.
+$script:IsElevated = (New-Object Security.Principal.WindowsPrincipal(
+        [Security.Principal.WindowsIdentity]::GetCurrent())
+    ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+
+function Invoke-Privileged {
+    param([string]$CommandLine)
+
+    if ($script:IsElevated) {
+        & cmd.exe /c $CommandLine
+    }
+    else {
+        Start-Process cmd.exe -Verb RunAs -WindowStyle Hidden -Wait -ArgumentList ('/c ' + $CommandLine)
+    }
+}
+
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).ProviderPath
 $engine = Join-Path $root 'src\SplitLane.Engine\bin\Debug\net10.0-windows\win-x64\SplitLane.Engine.exe'
 $testbed = Join-Path $root 'tools\socks5-testbed\bin\Release\net10.0\SplitLane.Testbed.Socks5.exe'
@@ -68,15 +89,23 @@ foreach ($required in @($engine, $testbed)) {
 New-Item -ItemType Directory -Force -Path $artifacts | Out-Null
 
 function Stop-Everything {
-    Get-Process -Name 'SplitLane.Testbed.Socks5' -ErrorAction SilentlyContinue | Stop-Process -Force
-    # The engine runs elevated, so it cannot be stopped from here without elevating again.
+    # Best effort throughout. A leftover from an earlier elevated run cannot be stopped from an
+    # unelevated session, and failing to kill one is not a reason to refuse to run the test - the
+    # new server binds an ephemeral port of its own, so a stale one is inert rather than in the way.
+    foreach ($name in @('SplitLane.Testbed.Socks5', 'SplitLane.Engine')) {
+        foreach ($process in @(Get-Process -Name $name -ErrorAction SilentlyContinue)) {
+            try { Stop-Process -Id $process.Id -Force -ErrorAction Stop } catch { }
+        }
+    }
+
+    # Anything left is elevated and needs the same to clear.
     if (Get-Process -Name 'SplitLane.Engine' -ErrorAction SilentlyContinue) {
-        Start-Process cmd.exe -Verb RunAs -WindowStyle Hidden -Wait `
-            -ArgumentList '/c taskkill /f /im SplitLane.Engine.exe >nul 2>&1'
+        try { Invoke-Privileged 'taskkill /f /im SplitLane.Engine.exe >nul 2>&1' } catch { }
     }
 }
 
 Write-Host "SplitLane :: divert verification ($Mode mode)" -ForegroundColor Cyan
+Write-Host "  session: $(if ($script:IsElevated) { 'elevated' } else { 'not elevated - a UAC prompt will be raised' })"
 Stop-Everything
 
 # ---- 1. The upstream, which is where the proof comes from --------------------------------------
@@ -90,7 +119,11 @@ $proxyPort = [int]$match.Matches[0].Groups[1].Value
 Write-Host "  test SOCKS5 server on 127.0.0.1:$proxyPort"
 
 # ---- 2. One rule, for curl -----------------------------------------------------------------------
-New-Item -ItemType Directory -Force -Path 'C:\ProgramData\SplitLane\logs' | Out-Null
+#
+# Written next to the script and copied into place by the elevated command below, rather than written
+# directly. %ProgramData%\SplitLane is created by whichever process gets there first, and once an
+# elevated engine has owned it an unelevated session can no longer overwrite the file.
+$stagedConfig = Join-Path $artifacts 'verify-config.json'
 @{
     version = @{ schemaVersion = 1; generation = 1 }
     rules   = @(@{
@@ -116,11 +149,11 @@ New-Item -ItemType Directory -Force -Path 'C:\ProgramData\SplitLane\logs' | Out-
     isRoutingEnabled = $true
     logsDirectFlows  = $false
     redirectPort     = 0
-} | ConvertTo-Json -Depth 8 | Set-Content 'C:\ProgramData\SplitLane\configuration.json' -Encoding utf8
+} | ConvertTo-Json -Depth 8 | Set-Content $stagedConfig -Encoding utf8
 Write-Host '  rule: curl.exe -> PROXY'
 
 # ---- 3. The engine, elevated ---------------------------------------------------------------------
-Remove-Item $engineOut, $engineLog -Force -ErrorAction SilentlyContinue
+Remove-Item $engineOut -Force -ErrorAction SilentlyContinue
 
 $switches = @('--verbose', '--no-console-log')
 if ($Mode -eq 'local') { $switches += '--redirect-local' }
@@ -129,11 +162,33 @@ if ($Trace) { $switches += '--trace' }
 # Output is redirected inside cmd rather than by Start-Process, which cannot redirect an elevated
 # child. It also keeps the engine off a console: an elevated console window with QuickEdit enabled
 # blocks Console.WriteLine on a stray selection, and takes every thread that logs with it.
-$command = '/c "' + $engine + '" ' + ($switches -join ' ') + ' > "' + $engineOut + '" 2>&1'
+# One elevated step does everything that needs elevation: clear any leftover engine, put the
+# configuration in place, drop the previous log, and start. Asking for the prompt once is worth a
+# slightly longer command line.
+$command = '/c taskkill /f /im SplitLane.Engine.exe >nul 2>&1' +
+    ' & md "C:\ProgramData\SplitLane\logs" 2>nul' +
+    ' & del /q "' + $engineLog + '" 2>nul' +
+    ' & copy /y "' + $stagedConfig + '" "C:\ProgramData\SplitLane\configuration.json" >nul' +
+    ' & "' + $engine + '" ' + ($switches -join ' ') + ' > "' + $engineOut + '" 2>&1'
 
 Write-Host ''
-Write-Host '  Accept the UAC prompt to start the engine.' -ForegroundColor Yellow
-Start-Process cmd.exe -Verb RunAs -ArgumentList $command -WindowStyle Hidden
+
+if ($script:IsElevated) {
+    # Already privileged: put the configuration in place and start the engine directly. No prompt,
+    # nothing to miss, and the output redirection is ours rather than cmd's.
+    New-Item -ItemType Directory -Force -Path 'C:\ProgramData\SplitLane\logs' | Out-Null
+    Remove-Item $engineLog -Force -ErrorAction SilentlyContinue
+    Copy-Item $stagedConfig 'C:\ProgramData\SplitLane\configuration.json' -Force
+
+    Start-Process $engine -ArgumentList $switches -WindowStyle Hidden `
+        -RedirectStandardOutput $engineOut -RedirectStandardError ($engineOut + '.err') | Out-Null
+}
+else {
+    Write-Host '  Accept the UAC prompt to start the engine.' -ForegroundColor Yellow
+    Write-Host '  If no prompt appears, the secure desktop is hidden behind a full-screen'
+    Write-Host '  application. Minimise it, or run this script from an elevated terminal.'
+    Start-Process cmd.exe -Verb RunAs -ArgumentList $command -WindowStyle Hidden
+}
 
 $up = $false
 for ($i = 0; $i -lt 25; $i++) {
@@ -143,7 +198,13 @@ for ($i = 0; $i -lt 25; $i++) {
 
 if (-not $up) {
     Stop-Everything
-    throw 'The engine did not start. The UAC prompt was probably declined.'
+    if ($script:IsElevated) {
+        throw "The engine did not start. See $engineOut."
+    }
+
+    throw 'The engine did not start - no elevated process appeared. Either the UAC prompt was ' +
+        'declined, or it was drawn on the secure desktop behind a full-screen application and ' +
+        'never seen. Run this script from an elevated terminal instead.'
 }
 
 Start-Sleep -Seconds 3
@@ -198,6 +259,8 @@ Write-Host "  engine log: $engineLog"
 
 if (-not $KeepRunning) {
     Stop-Everything
-    Remove-Item -Recurse -Force 'C:\ProgramData\SplitLane' -ErrorAction SilentlyContinue
-    Write-Host '  cleaned up (engine stopped, test config removed)'
+    # The tree belongs to an elevated process, so removing it needs the same. Best effort: a leftover
+    # test configuration is untidy, not dangerous, and the engine is already stopped.
+    try { Invoke-Privileged 'rmdir /s /q "C:\ProgramData\SplitLane" >nul 2>&1' } catch { }
+    Write-Host '  cleaned up (engine stopped, test configuration removed)'
 }
