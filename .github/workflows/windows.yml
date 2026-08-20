@@ -63,12 +63,16 @@ jobs:
       # 322 tests, none of which needs a network, a driver, elevation, or a daemon started first.
       # The SOCKS5 integration tests run against an in-process server, so they run here rather than
       # being skipped the way a Docker-dependent suite would be.
+      # LogFilePrefix, not LogFileName: two test projects writing one fixed filename means the
+      # second overwrites the first, and the published record then reports 66 tests where 327 ran.
+      # The gate was still sound - the step fails on any failure - but a result that understates
+      # itself is the kind of thing this project treats as a defect.
       - name: Test
         working-directory: windows
         run: >
           dotnet test SplitLane.Windows.slnx
           --configuration Release --no-build
-          --logger "trx;LogFileName=results.trx"
+          --logger "trx;LogFilePrefix=results"
           --results-directory ../artifacts/test-results
 
       - name: Publish test results
