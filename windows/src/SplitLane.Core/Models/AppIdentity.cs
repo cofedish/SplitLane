@@ -78,6 +78,46 @@ public sealed record AppIdentity
         PackageFamilyName is not null ||
         ExecutablePath.Contains(@"\WindowsApps\", StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// The directory whose name carries a version, for a packaged application.
+    /// </summary>
+    /// <remarks>
+    /// Packaged applications install to <c>WindowsApps\Publisher.Name_1.2.3.0_x64__hash</c>. The
+    /// version sits in the directory name, so <b>the path changes on every update</b> and a
+    /// path-keyed rule silently stops matching: the application keeps working and quietly goes
+    /// DIRECT, which is precisely the failure this product exists to prevent (W-4).
+    ///
+    /// <para>
+    /// Returned so the UI can name the thing that will change rather than warning vaguely. Null
+    /// when the application is not packaged, or when the path has no versioned segment.
+    /// </para>
+    /// </remarks>
+    [JsonIgnore]
+    public string? VersionedSegment
+    {
+        get
+        {
+            if (!IsPackaged)
+            {
+                return null;
+            }
+
+            foreach (var segment in ExecutablePath.Split('\\'))
+            {
+                // A packaged directory name is Publisher.Name_version_arch__hash. The double
+                // underscore before the publisher hash is the reliable marker; a plain underscore
+                // appears in plenty of ordinary folder names.
+                if (segment.Contains("__", StringComparison.Ordinal) &&
+                    segment.Contains('_', StringComparison.Ordinal))
+                {
+                    return segment;
+                }
+            }
+
+            return null;
+        }
+    }
+
     /// <summary>Value equality on the routing key alone, with Windows path casing rules.</summary>
     public bool Equals(AppIdentity? other)
         => other is not null && Rules.ExecutablePath.Comparer.Equals(ExecutablePath, other.ExecutablePath);

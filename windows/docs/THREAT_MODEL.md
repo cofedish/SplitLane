@@ -72,14 +72,27 @@ Covered by `RuleEngineTests.FamilyMatchingOnASharedSystemDirectoryIsRefused` and
 
 ### W-4 — Packaged applications move on update
 
-**Severity: low, cosmetic-adjacent.**
+**Severity: was a silent leak. Now reported.**
 
 MSIX/Store applications run from a versioned directory under `C:\Program Files\WindowsApps\...`. The
 path changes on every update, so a path-keyed rule stops matching silently — the application keeps
 working and quietly goes DIRECT, which is exactly the failure mode this product exists to prevent.
+Nothing else in the interface would have reported it.
 
-`AppIdentity.IsPackaged` detects the case. The UI does not yet warn about it. This is the most
-user-visible unfinished edge in the port.
+Three things now do:
+
+- `AppIdentity.VersionedSegment` names the directory that will change, so the warning can say *what*
+  rather than gesture at a risk.
+- The Applications list marks any packaged rule at the moment it is created, and every rule whose
+  executable is no longer on disk — the caveat having already come true — with the plain statement
+  that its traffic is going DIRECT.
+- Adding a packaged application says so in the banner rather than waiting for the update to break it.
+
+The disk check runs once per configuration load, not on the routing path.
+
+Writing the tests for this also surfaced a real gap: `C:\Program Files\WindowsApps` was not in the
+shared-directory list, so family matching there would have been the W-3 mistake in a different
+folder — every packaged application on the machine in one rule. It is now refused.
 
 ### W-5 — The redirect listener is a local TCP port
 
@@ -159,7 +172,7 @@ important part of this document.
 
 ### The WinDivert reinjection path has never run against the driver
 
-Everything in this repository builds with zero warnings, and 309 tests pass. Those tests cover the
+Everything in this repository builds with zero warnings, and 322 tests pass. Those tests cover the
 rule engine exhaustively, the SOCKS5 codec byte by byte, the packet rewrite and its checksums against
 constructed packets, the NAT table including expiry, the DNS parser including malformed input, and
 the relay end-to-end against a real SOCKS5 server.

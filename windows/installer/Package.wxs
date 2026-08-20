@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+
+  <!--
+    SplitLane for Windows installer.
+
+    Three things this deliberately does NOT do:
+
+      1. It does not bundle WinDivert. The driver is third-party, dual-licensed, and this repository
+         has not chosen a licence of its own yet — redistributing someone else's kernel driver from
+         an unlicensed project is not a decision an installer should make quietly. The fetch script
+         is installed alongside instead, and the engine's preflight mode points at it. See ADR W-0001.
+
+      2. It does not register the engine as a service. There is no service host yet, and installing
+         one that does not exist would be worse than not installing one at all.
+
+      3. It carries no licence dialog, because the project has not chosen a licence. Every stock WiX
+         UI set includes one, so this ships with the basic MSI progress UI rather than presenting
+         terms that do not exist.
+  -->
+
+  <Package Name="SplitLane"
+           Manufacturer="SplitLane"
+           Version="$(BuildVersion)"
+           UpgradeCode="8C6A7B4E-2D31-4F0A-9E77-5B1C0D2A9F14"
+           Scope="perMachine"
+           Compressed="yes">
+
+    <!-- Newer builds replace older ones in place rather than accumulating side by side. -->
+    <MajorUpgrade DowngradeErrorMessage="A newer version of SplitLane is already installed." />
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/cofedish/SplitLane" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+
+    <!--
+      64-bit only. WinDivert ships no 32-bit driver that loads on a modern 64-bit Windows, so a
+      32-bit install could never divert anything.
+    -->
+    <Launch Condition="VersionNT64" Message="SplitLane requires 64-bit Windows." />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="SplitLane">
+        <!--
+          The engine goes in its own subdirectory. Both applications are published self-contained,
+          so they carry overlapping copies of the .NET runtime; installed side by side in one folder
+          they would fight over the same file names.
+        -->
+        <Directory Id="EngineFolder" Name="Engine" />
+        <Directory Id="ToolsFolder" Name="Tools" />
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="ShortcutFolder" Name="SplitLane" />
+    </StandardDirectory>
+
+    <Feature Id="Main" Title="SplitLane" Level="1" AllowAbsent="no">
+      <ComponentGroupRef Id="AppFiles" />
+      <ComponentGroupRef Id="EngineFiles" />
+      <ComponentGroupRef Id="ToolFiles" />
+      <ComponentGroupRef Id="Shortcuts" />
+    </Feature>
+  </Package>
+
+  <Fragment>
+    <!--
+      Globbed rather than listed. A self-contained publish is a couple of hundred files and the set
+      changes with every SDK update; a hand-written manifest would be wrong by the next runtime
+      release, and wrong in the way that ships a broken installer.
+    -->
+    <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
+      <Files Include="$(AppPublishDir)\**" />
+    </ComponentGroup>
+
+    <ComponentGroup Id="EngineFiles" Directory="EngineFolder">
+      <Files Include="$(EnginePublishDir)\**" />
+    </ComponentGroup>
+
+    <ComponentGroup Id="ToolFiles" Directory="ToolsFolder">
+      <Files Include="$(ToolsDir)\fetch-windivert.ps1" />
+    </ComponentGroup>
+  </Fragment>
+
+  <Fragment>
+    <ComponentGroup Id="Shortcuts" Directory="ShortcutFolder">
+      <Component Id="AppShortcut" Guid="1F5B9C22-77A4-4B60-93D1-6E0F4A8C2B55">
+        <Shortcut Id="AppStartMenu"
+                  Name="SplitLane"
+                  Description="Per-application network routing"
+                  Target="[INSTALLFOLDER]SplitLane.exe"
+                  WorkingDirectory="INSTALLFOLDER" />
+
+        <!--
+          A separate entry for the engine, which needs elevation. Windows raises the UAC prompt when
+          the target's manifest asks for it; the engine's asks for asInvoker so that its preflight
+          mode stays runnable, so this shortcut is what a user reaches for and the engine's own
+          refusal message is what tells them to right-click and run as administrator.
+        -->
+        <Shortcut Id="EngineStartMenu"
+                  Name="SplitLane Engine"
+                  Description="The routing engine. Run as administrator to divert traffic."
+                  Target="[EngineFolder]SplitLane.Engine.exe"
+                  WorkingDirectory="EngineFolder" />
+
+        <RemoveFolder Id="RemoveShortcutFolder" Directory="ShortcutFolder" On="uninstall" />
+        <RegistryValue Root="HKCU" Key="Software\SplitLane" Name="installed"
+                       Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+</Wix>

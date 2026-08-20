@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.IO;
 using System.Windows;
 using Microsoft.Win32;
 using SplitLane.App.Infrastructure;
@@ -131,14 +132,43 @@ public sealed class ApplicationsViewModel : ObservableObject
         ? "No applications selected — everything on this machine is DIRECT."
         : $"{ProxiedCount} of {Rules.Count} in the proxy lane. Everything else is DIRECT.";
 
+    /// <summary>How many rules name an executable that is no longer there.</summary>
+    public int StaleCount => Rules.Count(rule => rule.ExecutableIsMissing);
+
+    /// <summary>Whether to raise the banner about rules that have stopped matching.</summary>
+    public bool HasStaleRules => StaleCount > 0;
+
+    /// <summary>What the stale-rule banner says.</summary>
+    public string StaleSummary => StaleCount == 1
+        ? "One rule names an executable that is no longer on disk. It matches nothing, so that application is going DIRECT."
+        : $"{StaleCount} rules name executables that are no longer on disk. They match nothing, so those applications are going DIRECT.";
+
     /// <summary>Rebuilds the list from a configuration.</summary>
+    /// <remarks>
+    /// Each rule's executable is checked against the disk here, once per load. A rule whose binary
+    /// has gone matches nothing, so the application it names is quietly going DIRECT — the failure
+    /// this product exists to prevent, and one nothing else would report (W-4).
+    /// </remarks>
     public void LoadFrom(RuntimeConfiguration configuration)
     {
         Rules.Clear();
 
         foreach (var rule in configuration.Rules)
         {
-            Rules.Add(new AppRuleViewModel(rule, OnRuleChanged));
+            var row = new AppRuleViewModel(rule, OnRuleChanged);
+
+            try
+            {
+                row.ExecutableIsMissing = !File.Exists(row.ExecutablePath);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+            {
+                // An unreadable path is not evidence the file is gone, and claiming it is would send
+                // the user chasing a rule that works.
+                row.ExecutableIsMissing = false;
+            }
+
+            Rules.Add(row);
         }
 
         RaiseCounts();
@@ -169,10 +199,19 @@ public sealed class ApplicationsViewModel : ObservableObject
         _main.MarkDirty();
         RaiseCounts();
 
-        _main.SetBanner(identity.SupportsFamilyMatching
-            ? $"{identity.DisplayName} added to the proxy lane."
-            : $"{identity.DisplayName} added. Its folder is shared with other programs, so it is " +
-              "matched exactly rather than by folder.");
+        if (identity.IsPackaged)
+        {
+            _main.SetBanner(
+                $"{identity.DisplayName} added. It is a packaged app, so its install path contains a " +
+                "version and will change on the next update — the rule will need re-adding then.");
+        }
+        else
+        {
+            _main.SetBanner(identity.SupportsFamilyMatching
+                ? $"{identity.DisplayName} added to the proxy lane."
+                : $"{identity.DisplayName} added. Its folder is shared with other programs, so it is " +
+                  "matched exactly rather than by folder.");
+        }
     }
 
     private async Task OpenPickerAsync()
@@ -230,5 +269,8 @@ public sealed class ApplicationsViewModel : ObservableObject
         Raise(nameof(IsEmpty));
         Raise(nameof(ProxiedCount));
         Raise(nameof(Summary));
+        Raise(nameof(StaleCount));
+        Raise(nameof(HasStaleRules));
+        Raise(nameof(StaleSummary));
     }
 }

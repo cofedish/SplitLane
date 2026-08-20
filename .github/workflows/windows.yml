@@ -1,0 +1,223 @@
+name: Windows
+
+# The Windows port lives under windows/ and has its own toolchain, so this workflow is scoped to
+# that path. A change to the macOS Swift sources should not spend ten minutes building an MSI.
+on:
+  push:
+    branches: [main, windows]
+    paths:
+      - 'windows/**'
+      - '.github/workflows/windows.yml'
+    tags:
+      - 'v*'
+  pull_request:
+    paths:
+      - 'windows/**'
+      - '.github/workflows/windows.yml'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to stamp on the build'
+        required: false
+        default: '0.1.0'
+
+env:
+  DOTNET_NOLOGO: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 'true'
+
+jobs:
+  # ---------------------------------------------------------------------------------------------
+  # Build and test. Runs on every push and pull request, and gates everything downstream.
+  # ---------------------------------------------------------------------------------------------
+  test:
+    name: Build and test
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Cache NuGet
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('windows/**/*.csproj', 'windows/**/*.wixproj') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      - name: Restore
+        working-directory: windows
+        run: dotnet restore SplitLane.Windows.slnx
+
+      # Warnings are errors project-wide, so this step is also the style and API-hygiene gate.
+      - name: Build
+        working-directory: windows
+        run: dotnet build SplitLane.Windows.slnx --configuration Release --no-restore
+
+      # 309 tests, none of which needs a network, a driver, elevation, or a daemon started first.
+      # The SOCKS5 integration tests run against an in-process server, so they run here rather than
+      # being skipped the way a Docker-dependent suite would be.
+      - name: Test
+        working-directory: windows
+        run: >
+          dotnet test SplitLane.Windows.slnx
+          --configuration Release --no-build
+          --logger "trx;LogFileName=results.trx"
+          --results-directory ../artifacts/test-results
+
+      - name: Publish test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: artifacts/test-results/**/*.trx
+          retention-days: 14
+
+  # ---------------------------------------------------------------------------------------------
+  # Package. Produces the MSI and the portable zip through the same script a developer runs, so a
+  # release built here and one built by hand come out of the same steps rather than out of two
+  # descriptions of them that drift apart.
+  # ---------------------------------------------------------------------------------------------
+  package:
+    name: Package
+    runs-on: windows-latest
+    needs: test
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Cache NuGet
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('windows/**/*.csproj', 'windows/**/*.wixproj') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      # A tag is the version. Anything else is that version plus the run number, so untagged builds
+      # are ordered and distinguishable without ever colliding with a real release.
+      - name: Resolve version
+        id: version
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF -like 'refs/tags/v*') {
+              $version = $env:GITHUB_REF -replace '^refs/tags/v', ''
+          }
+          elseif ('${{ github.event.inputs.version }}') {
+              $version = '${{ github.event.inputs.version }}'
+          }
+          else {
+              $version = "0.1.0.$env:GITHUB_RUN_NUMBER"
+          }
+
+          # MSI product versions are four numeric fields at most, and msiexec rejects anything else
+          # at install time rather than at build time — which would mean shipping a broken artifact.
+          if ($version -notmatch '^\d+(\.\d+){0,3}$') {
+              throw "Version '$version' is not a valid MSI product version (up to four numeric fields)."
+          }
+
+          "version=$version" >> $env:GITHUB_OUTPUT
+          Write-Host "Building version $version"
+
+      - name: Build installer and portable archive
+        working-directory: windows
+        shell: pwsh
+        run: ./tools/build-installer.ps1 -Version '${{ steps.version.outputs.version }}'
+
+      # The MSI is unsigned. SmartScreen will warn on first run, and saying so here is better than
+      # letting each person discover it and wonder whether the download was tampered with.
+      - name: Record artifact hashes
+        working-directory: windows/artifacts/release
+        shell: pwsh
+        run: |
+          $lines = @(
+              'SplitLane for Windows'
+              'Version ${{ steps.version.outputs.version }}'
+              "Commit  $env:GITHUB_SHA"
+              ''
+              'SHA-256'
+          )
+          Get-ChildItem -File | ForEach-Object {
+              $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash
+              $lines += "  $hash  $($_.Name)"
+          }
+          $lines += ''
+          $lines += 'These files are not code-signed. Windows SmartScreen will warn on first run.'
+          $lines += 'Verify the hashes above against this workflow run before installing.'
+          $lines | Set-Content -Path 'SHA256SUMS.txt' -Encoding utf8
+          Get-Content 'SHA256SUMS.txt'
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: splitlane-windows-${{ steps.version.outputs.version }}
+          path: |
+            windows/artifacts/release/*.msi
+            windows/artifacts/release/*.zip
+            windows/artifacts/release/SHA256SUMS.txt
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------------------------
+  # Release. Tag-only. Attaches the packaged output to a GitHub release.
+  # ---------------------------------------------------------------------------------------------
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    needs: package
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download packaged output
+        uses: actions/download-artifact@v4
+        with:
+          pattern: splitlane-windows-*
+          merge-multiple: true
+          path: release
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          draft: false
+          generate_release_notes: true
+          body: |
+            ## SplitLane for Windows
+
+            Per-application network routing. Selected applications go through the proxy; everything
+            else is left alone.
+
+            ### Install
+
+            Run the MSI, or unpack the portable archive anywhere. Then:
+
+            ```powershell
+            # Fetch the divert driver. It is not bundled - see docs/adr/0001.
+            & "C:\Program Files\SplitLane\Tools\fetch-windivert.ps1"
+
+            # Check the machine can load it. Runs unelevated on purpose.
+            & "C:\Program Files\SplitLane\Engine\SplitLane.Engine.exe" --check
+            ```
+
+            Start **SplitLane Engine** as administrator, then **SplitLane** normally.
+
+            ### Before you install
+
+            These binaries are **not code-signed**, so SmartScreen will warn on first run. Verify the
+            SHA-256 hashes in `SHA256SUMS.txt` against the workflow run that produced them.
+
+            The divert layer has not been verified against the driver on real traffic. See
+            `windows/docs/THREAT_MODEL.md` for what that means.

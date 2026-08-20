@@ -48,7 +48,7 @@ and the packet path is a NAT-table lookup keyed on the source port. See `docs/NE
 ```powershell
 cd windows
 dotnet build SplitLane.Windows.slnx
-dotnet test  SplitLane.Windows.slnx          # 309 tests, no network/driver/elevation needed
+dotnet test  SplitLane.Windows.slnx          # 322 tests, no network/driver/elevation needed
 
 SplitLane.Engine.exe --check                 # why the divert layer will not start
 SplitLane.Engine.exe --no-divert             # everything except interception
@@ -65,7 +65,7 @@ without changing the page.
 
 ## State
 
-Core, engine and app are written, build with zero warnings, and 309 tests pass. The app has been run,
+Core, engine and app are written, build with zero warnings, and 322 tests pass. The app has been run,
 driven end to end, and screenshotted. The engine has been run in `--no-divert` mode and its control
 channel, rule engine, redirect listener and SOCKS5 relay verified against a real proxy.
 
@@ -76,8 +76,8 @@ elevated run confirms a selected application's connection completing through the
 description is **implemented, compiled and unit-tested — not verified**. See
 `docs/THREAT_MODEL.md § Unverified`.
 
-Not written: a Windows service host, an installer, and a UI warning for packaged applications whose
-path changes on update (W-4).
+Packaged applications (W-4) now warn in the UI, and there is an MSI plus a GitHub Actions pipeline
+that builds it. Not written: a Windows service host, and code signing.
 
 ## Definition of Done
 

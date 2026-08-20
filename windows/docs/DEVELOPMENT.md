@@ -9,7 +9,7 @@ dotnet build SplitLane.Windows.slnx
 dotnet test  SplitLane.Windows.slnx
 ```
 
-309 tests. None of them needs a network, a driver, elevation, or a daemon to be started first — the
+322 tests. None of them needs a network, a driver, elevation, or a daemon to be started first — the
 SOCKS5 integration tests run against an in-process server in `tools/socks5-testbed`, so they run on
 every `dotnet test` rather than being skipped like the macOS project's Docker-based equivalents.
 
@@ -83,6 +83,54 @@ reachable only from the interactive session is a real and common configuration o
 
 Pass `--auth` to the testbed to exercise the RFC 1929 path (`splitlane` / `testbed`).
 
+## Packaging
+
+```powershell
+.\tools\build-installer.ps1 -Version 0.1.0
+```
+
+Publishes both applications self-contained, builds the MSI with WiX 5, and writes a portable zip
+beside it in `artifacts/release`.
+
+Self-contained roughly doubles the download and buys an installer that works on a machine with no
+.NET runtime, which is most machines and exactly the one someone installing a network tool is likely
+to be on. The result is about 53 MB for the MSI; that weight is two copies of the .NET and WPF
+runtime, not anything SplitLane ships.
+
+The installer project is deliberately **not** in `SplitLane.Windows.slnx`. The WiX SDK is a separate
+toolchain that must be restored before MSBuild can parse the file, and including it would mean
+`dotnet build` fails on a clean machine for someone who only wanted to run the tests.
+
+Three things the installer does not do, each on purpose:
+
+- **It does not bundle WinDivert.** The driver is third-party, dual-licensed, and this repository has
+  not chosen a licence of its own. `fetch-windivert.ps1` is installed alongside instead.
+- **It does not register a service.** There is no service host yet.
+- **It carries no licence dialog**, because there is no licence. Every stock WiX UI set includes one,
+  so the MSI ships with the basic progress UI rather than presenting terms that do not exist.
+
+## Continuous integration
+
+`.github/workflows/windows.yml`, scoped to `windows/**` so a change to the macOS Swift sources does
+not spend ten minutes building an MSI.
+
+| Job | Runs on | Does |
+|---|---|---|
+| `test` | every push and PR | restore, build Release, run all tests, upload the `.trx` |
+| `package` | after `test` | `build-installer.ps1`, hash the output, upload MSI + zip |
+| `release` | tags matching `v*` | attach the packaged output to a GitHub release |
+
+Because warnings are errors project-wide, the build step is also the style and API-hygiene gate.
+
+A tag is the version. Anything else becomes `0.1.0.<run number>`, so untagged builds stay ordered and
+never collide with a real release. The version is validated against the MSI four-field format in the
+workflow, because `msiexec` rejects a malformed one at *install* time — which would mean shipping an
+artifact that cannot be installed.
+
+Nothing is code-signed. The workflow writes `SHA256SUMS.txt` and the release notes say plainly that
+SmartScreen will warn, rather than leaving each person to wonder whether their download was tampered
+with.
+
 ## Layout
 
 ```
@@ -90,12 +138,15 @@ SplitLane.Windows.slnx
 src/SplitLane.Core/          models, rules, SOCKS5, configuration, IPC contracts, logging
 src/SplitLane.Engine/        WinDivert interop, divert pipeline, NAT, relay, control server
 src/SplitLane.App/           WPF — Theme, Views, ViewModels, Services, Infrastructure
-tests/SplitLane.Core.Tests/  248 tests: rules, paths, addresses, SOCKS5, configuration
+tests/SplitLane.Core.Tests/  261 tests: rules, paths, addresses, SOCKS5, configuration
 tests/SplitLane.Engine.Tests/ 61 tests: packet rewrite, NAT table, DNS parser, relay integration
 tools/socks5-testbed/        the SOCKS5 server used by tests and by hand
 tools/fetch-windivert.ps1    downloads the driver; never commits it
+tools/build-installer.ps1    publishes both apps and builds the MSI; CI runs this same script
 tools/uiprobe/               the screenshot and UI-automation harness
+installer/                   WiX 5 sources. Not in the solution; see Packaging.
 runtime/windivert/           where the driver lands. Git-ignored.
+docs/screenshots/            captures of the running application
 ```
 
 ## What is not done
@@ -105,6 +156,5 @@ runtime/windivert/           where the driver lands. Git-ignored.
   needs a machine with WinDivert installed and an elevated prompt.
 - The engine runs as a console process. A Windows service host, so routing survives a logout, is not
   written.
-- Packaged (MSIX/Store) applications are detected but the UI does not yet warn that their path
-  changes on update (W-4).
-- There is no installer.
+- Nothing is code-signed, so SmartScreen warns and the driver has to be trusted on the strength of
+  its own signature rather than ours.

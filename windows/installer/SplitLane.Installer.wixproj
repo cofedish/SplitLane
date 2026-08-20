@@ -1,0 +1,27 @@
+<Project Sdk="WixToolset.Sdk/5.0.2">
+
+  <!--
+    Builds the MSI from two published output folders.
+
+    Deliberately NOT part of SplitLane.Windows.slnx: the WiX SDK is a separate toolchain that must be
+    restored before MSBuild can even parse this file, and putting it in the solution would mean
+    `dotnet build` fails on a clean machine for someone who only wanted to run the tests.
+
+    Build it explicitly, after publishing both applications — see tools/build-installer.ps1.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Package</OutputType>
+    <InstallerPlatform>x64</InstallerPlatform>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(BuildVersion)' == ''">
+    <BuildVersion>0.1.0</BuildVersion>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <OutputName>SplitLane-$(BuildVersion)-x64</OutputName>
+    <DefineConstants>BuildVersion=$(BuildVersion);AppPublishDir=$(AppPublishDir);EnginePublishDir=$(EnginePublishDir);ToolsDir=$(ToolsDir)</DefineConstants>
+  </PropertyGroup>
+
+</Project>

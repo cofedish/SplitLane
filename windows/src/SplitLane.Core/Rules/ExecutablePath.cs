@@ -323,6 +323,11 @@ public static class ExecutablePath
         @"Windows\Temp",
         "Program Files",
         "Program Files (x86)",
+        // Every packaged (MSIX/Store) application on the machine installs under WindowsApps, so a
+        // family rule rooted here is the System32 mistake wearing a different folder name. The
+        // versioned directory one level down belongs to a single application and stays safe.
+        @"Program Files\WindowsApps",
+        @"Program Files (x86)\WindowsApps",
         "ProgramData",
         "Users",
         "Temp",

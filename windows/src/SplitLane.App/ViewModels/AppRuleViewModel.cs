@@ -11,6 +11,7 @@ public sealed class AppRuleViewModel : ObservableObject
     private RouteAction _action;
     private MatchMode _matchMode;
     private bool _isEnabled;
+    private bool _executableIsMissing;
 
     /// <summary>Wraps a stored rule.</summary>
     public AppRuleViewModel(AppRule rule, Action changed)
@@ -35,6 +36,58 @@ public sealed class AppRuleViewModel : ObservableObject
 
     /// <summary>Publisher, or a plain statement that there is none.</summary>
     public string PublisherLabel => Identity.Publisher ?? "Unsigned";
+
+    /// <summary>
+    /// Whether the executable this rule names is no longer on disk.
+    /// </summary>
+    /// <remarks>
+    /// Set by the page when it loads, not computed here: the check is file I/O and a view model
+    /// property is read repeatedly by the binding engine.
+    /// </remarks>
+    public bool ExecutableIsMissing
+    {
+        get => _executableIsMissing;
+        set
+        {
+            if (Set(ref _executableIsMissing, value))
+            {
+                Raise(nameof(HasWarning));
+                Raise(nameof(WarningText));
+            }
+        }
+    }
+
+    /// <summary>Whether this rule needs the user's attention.</summary>
+    public bool HasWarning => ExecutableIsMissing || Identity.IsPackaged;
+
+    /// <summary>
+    /// What is wrong, in the order that matters.
+    /// </summary>
+    /// <remarks>
+    /// A missing executable is reported before the packaged-path caveat, because for a packaged
+    /// application the missing file is usually the caveat having already come true.
+    /// </remarks>
+    public string WarningText
+    {
+        get
+        {
+            if (ExecutableIsMissing)
+            {
+                return Identity.IsPackaged
+                    ? "This executable is gone — the app has almost certainly been updated and now " +
+                      "lives at a new versioned path. Its traffic is going DIRECT. Remove this rule " +
+                      "and add the application again."
+                    : "This executable is no longer on disk, so the rule matches nothing and its " +
+                      "traffic is going DIRECT.";
+            }
+
+            return Identity.VersionedSegment is { } segment
+                ? $"Packaged app: the path contains a version ({segment}), so it will change on the " +
+                  "next update and this rule will silently stop matching."
+                : "Packaged app: its install path contains a version, so it will change on the next " +
+                  "update and this rule will silently stop matching.";
+        }
+    }
 
     /// <summary>The lane.</summary>
     public RouteAction Action
