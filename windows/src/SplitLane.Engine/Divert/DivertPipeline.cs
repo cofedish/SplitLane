@@ -409,10 +409,15 @@ public sealed class DivertPipeline : IAsyncDisposable
                 break;
 
             case RouteAction.Block:
+                _nat.RecordDirect(socket.LocalPort, remote, socket.RemotePort);
                 _statistics.CountBlocked();
                 break;
 
             default:
+                // Recorded even though nothing is redirected. The packet loop reads the absence of a
+                // decision as "not decided yet" and waits; without this every connection an
+                // unselected application opens pays that wait in full, for an answer already given.
+                _nat.RecordDirect(socket.LocalPort, remote, socket.RemotePort);
                 _statistics.CountDirect();
                 if (engine.Snapshot.LogsDirectFlows)
                 {
@@ -499,14 +504,14 @@ public sealed class DivertPipeline : IAsyncDisposable
     /// a per-port wait handle would cost an allocation on every connection on the machine to save a
     /// few spins on some of them.
     /// </remarks>
-    private void WaitForDecision(ushort sourcePort)
+    private void WaitForDecision(in PacketView view)
     {
         var deadline = Stopwatch.GetTimestamp() + (Stopwatch.Frequency * DecisionWaitMilliseconds / 1000);
         var spins = 0;
 
         while (Stopwatch.GetTimestamp() < deadline)
         {
-            if (_nat.TryGet(sourcePort, out _))
+            if (HasDecision(view))
             {
                 Interlocked.Increment(ref _decisionsWaitedFor);
                 return;
@@ -568,9 +573,9 @@ public sealed class DivertPipeline : IAsyncDisposable
         // So a SYN with no decision waits for one, briefly. Only SYNs wait, and only for a few
         // milliseconds: they are a small fraction of traffic, the cost lands on connection setup
         // rather than throughput, and a bounded wait cannot stall the packet loop indefinitely.
-        if (view.IsTcpSyn && !_nat.TryGet(view.SourcePort, out _))
+        if (view.IsTcpSyn && !HasDecision(view))
         {
-            WaitForDecision(view.SourcePort);
+            WaitForDecision(view);
         }
 
         // Application traffic that a socket-layer decision already marked for the proxy lane.
@@ -657,6 +662,29 @@ public sealed class DivertPipeline : IAsyncDisposable
         // addresses and handing it back the way it arrived lets the stack route it, which is what it
         // is for: a packet addressed to this machine's own address loops back on its own.
         return PacketAction.Rewritten;
+    }
+
+    /// <summary>
+    /// Whether the socket layer has already ruled on this connection, either way.
+    /// </summary>
+    /// <remarks>
+    /// The destination is checked as well as the port. Ephemeral ports are recycled, and a row left
+    /// behind by an unrelated connection that happened to hold the same port must not be mistaken
+    /// for this one's answer - in the direction that matters, that would end a real decision's wait
+    /// early and let a selected application's SYN out un-redirected.
+    /// </remarks>
+    private bool HasDecision(in PacketView view)
+    {
+        if (_nat.TryGet(view.SourcePort, out var entry) &&
+            entry.OriginalDestinationPort == view.DestinationPort &&
+            AddressMatches(view.DestinationAddress, entry.OriginalDestination))
+        {
+            return true;
+        }
+
+        return _nat.TryGetDirect(view.SourcePort, out var destination, out var port) &&
+               port == view.DestinationPort &&
+               AddressMatches(view.DestinationAddress, destination);
     }
 
     private static bool AddressMatches(ReadOnlySpan<byte> packetAddress, IPAddress expected)

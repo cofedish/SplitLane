@@ -131,4 +131,69 @@ public sealed class NatTableTests
 
         Assert.Equal(500, table.Count);
     }
+
+    [Fact]
+    public void RecordDirect_MakesTheDecisionVisibleWithoutARedirect()
+    {
+        var table = new NatTable();
+
+        table.RecordDirect(51000, IPAddress.Parse("93.184.216.34"), 443);
+
+        Assert.True(table.TryGetDirect(51000, out var destination, out var port));
+        Assert.Equal(IPAddress.Parse("93.184.216.34"), destination);
+        Assert.Equal(443, port);
+
+        // It is a decision, not a redirect. Nothing may be rewritten on the strength of it.
+        Assert.False(table.TryGet(51000, out _));
+        Assert.Equal(0, table.Count);
+    }
+
+    [Fact]
+    public void RecordDirect_ExpiresLikeAnyOtherRow()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        var table = new NatTable(time) { EntryLifetime = TimeSpan.FromMinutes(5) };
+
+        table.RecordDirect(51000, IPAddress.Loopback, 80);
+        time.Advance(TimeSpan.FromMinutes(5) + TimeSpan.FromSeconds(1));
+
+        Assert.False(table.TryGetDirect(51000, out _, out _));
+    }
+
+    [Fact]
+    public void Remove_ForgetsBothHalves()
+    {
+        // A close that forgot one half would leave it to answer for whichever connection inherits
+        // the port next - and a stale "leave alone" is the answer that lets a SYN escape unrouted.
+        var table = new NatTable();
+        table.RecordDirect(51000, IPAddress.Parse("10.0.0.9"), 80);
+
+        Assert.True(table.Remove(51000));
+        Assert.False(table.TryGetDirect(51000, out _, out _));
+    }
+
+    [Fact]
+    public void Sweep_DropsExpiredDirectDecisions()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        var table = new NatTable(time) { EntryLifetime = TimeSpan.FromMinutes(5) };
+
+        table.RecordDirect(51000, IPAddress.Loopback, 80);
+        table.RecordDirect(51001, IPAddress.Loopback, 80);
+        time.Advance(TimeSpan.FromMinutes(6));
+
+        Assert.Equal(2, table.Sweep());
+        Assert.False(table.TryGetDirect(51000, out _, out _));
+    }
+
+    [Fact]
+    public void Clear_ForgetsDirectDecisionsToo()
+    {
+        var table = new NatTable();
+        table.RecordDirect(51000, IPAddress.Loopback, 80);
+
+        table.Clear();
+
+        Assert.False(table.TryGetDirect(51000, out _, out _));
+    }
 }

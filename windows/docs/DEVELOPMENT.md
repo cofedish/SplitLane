@@ -9,7 +9,7 @@ dotnet build SplitLane.Windows.slnx
 dotnet test  SplitLane.Windows.slnx
 ```
 
-322 tests. None of them needs a network, a driver, elevation, or a daemon to be started first — the
+327 tests. None of them needs a network, a driver, elevation, or a daemon to be started first — the
 SOCKS5 integration tests run against an in-process server in `tools/socks5-testbed`, so they run on
 every `dotnet test` rather than being skipped like the macOS project's Docker-based equivalents.
 
@@ -167,8 +167,57 @@ Two things about the test itself are load-bearing:
 
 | | |
 |---|---|
-| `loopback` | The original design: both endpoints move to `127.0.0.1`. Does not currently deliver. |
-| `local` | Only the destination changes, to the machine's own address, avoiding the loopback fast path. The listener then has to accept on all local addresses — see W-5. |
+| `loopback` | Both endpoints move to `127.0.0.1`. This is the shape that works, and the default. |
+| `local` | Only the destination changes, to the machine's own address. Kept because it distinguishes an injection that is discarded from one that is refused: a packet whose source is one of the machine's own addresses is rejected as a spoof on a physical interface, which is how the second of the three bugs was identified. The listener then has to accept on all local addresses — see W-5. |
+
+## Under load
+
+One connection working and a hundred and fifty working are different claims, and the second is the
+one a person routing their traffic through this cares about.
+
+```powershell
+.\tools\stress-divert.ps1 -Apps 6 -Requests 100 -Concurrency 25 -PayloadKb 1024
+```
+
+Several copies of `curl.exe` at distinct paths become distinct applications — SplitLane routes on the
+image path, so this exercises several routing keys rather than one rule hit repeatedly — and one more
+copy is left unselected as a control.
+
+Requests are aimed at **TEST-NET-3 (`203.0.113.0/24`)**, reserved for documentation and routed
+nowhere, and the SOCKS5 testbed answers as the origin as well as the proxy so the address never has
+to exist. That is what makes the result unambiguous in both directions: a selected application can
+only succeed through the proxy, and the control is *required to fail*. A control that succeeded would
+mean traffic reached a destination without a routing decision.
+
+An earlier version served the payload from this machine's own LAN address and measured nothing at
+all — traffic from a machine to its own address is loopback as far as the stack is concerned, the
+divert filter excludes loopback, and not one packet was ever redirected.
+
+Last run: 600/600 proxied, every payload intact, 600 MB at 20 MB/s, zero send failures, control 0/100.
+
+### What it costs an application nobody selected
+
+```powershell
+.\tools\measure-direct-cost.ps1
+```
+
+The promise is that unselected applications are left alone; on Windows that promise has a caveat, and
+this measures its size in milliseconds on the operation that pays for it. It times TCP connection
+setup to a destination on the local network with the engine down and up. Loopback is deliberately not
+used: the divert filter excludes it, so a loopback probe would report a reassuring zero.
+
+It found a real cost. A SYN with no routing decision waits briefly for one, and a DIRECT decision was
+recorded nowhere — so the packet loop could not distinguish "not decided yet" from "decided to leave
+alone", and every connection an unselected application opened waited out the full window: **8.16 ms,
+against 0.68 ms with the engine down**. Decisions that produce no redirect are now recorded too, with
+their destination so a recycled ephemeral port cannot answer for an unrelated connection. Afterwards:
+**0.14 ms**, with the wait-timeout counter over a full load run down from 19 to 0 while the SYNs that
+genuinely raced still waited and still got their answer.
+
+That fix nearly went unnoticed. The tools ran a fixed path under `bin/Debug` while a solution build
+writes to `bin/x64/Debug`, so the first measurement after the change came back identical to the one
+before it — correct to three digits, and about the wrong program. Every tool now resolves the newest
+engine binary and prints its build time.
 
 ## Layout
 
@@ -178,11 +227,14 @@ src/SplitLane.Core/          models, rules, SOCKS5, configuration, IPC contracts
 src/SplitLane.Engine/        WinDivert interop, divert pipeline, NAT, relay, control server
 src/SplitLane.App/           WPF — Theme, Views, ViewModels, Services, Infrastructure
 tests/SplitLane.Core.Tests/  261 tests: rules, paths, addresses, SOCKS5, configuration
-tests/SplitLane.Engine.Tests/ 61 tests: packet rewrite, NAT table, DNS parser, relay integration
+tests/SplitLane.Engine.Tests/ 66 tests: packet rewrite, NAT table, DNS parser, relay integration
 tools/socks5-testbed/        the SOCKS5 server used by tests and by hand
 tools/fetch-windivert.ps1    downloads the driver; never commits it
 tools/build-installer.ps1    publishes both apps and builds the MSI; CI runs this same script
 tools/verify-divert.ps1      the elevated end-to-end interception test
+tools/stress-divert.ps1      several applications at once, under load, with a control
+tools/measure-direct-cost.ps1 what SplitLane costs an application it was not asked to touch
+tools/engine-binary.ps1      picks the newest engine build, so no tool runs a stale one
 tools/uiprobe/               the screenshot and UI-automation harness
 installer/                   WiX 5 sources. Not in the solution; see Packaging.
 runtime/windivert/           where the driver lands. Git-ignored.
@@ -191,10 +243,9 @@ docs/screenshots/            captures of the running application
 
 ## What is not done
 
-- The divert layer has never run against the driver. See
-  [THREAT_MODEL.md § Unverified](THREAT_MODEL.md#unverified). This is the next thing to do and it
-  needs a machine with WinDivert installed and an elevated prompt.
 - The engine runs as a console process. A Windows service host, so routing survives a logout, is not
   written.
 - Nothing is code-signed, so SmartScreen warns and the driver has to be trusted on the strength of
   its own signature rather than ours.
+- Interception has been verified on IPv4 only. IPv6, sleep and resume, and adapter changes mid-flow
+  are untested.

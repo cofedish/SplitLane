@@ -70,6 +70,7 @@ public sealed record NatEntry(
 public sealed class NatTable(TimeProvider? timeProvider = null)
 {
     private readonly ConcurrentDictionary<ushort, NatEntry> _entries = new();
+    private readonly ConcurrentDictionary<ushort, DirectDecision> _direct = new();
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
 
     /// <summary>
@@ -112,8 +113,60 @@ public sealed class NatTable(TimeProvider? timeProvider = null)
         return true;
     }
 
+    /// <summary>Records that a connection was decided against proxying.</summary>
+    /// <remarks>
+    /// <para>
+    /// A decision that produced no redirect still has to be visible, because the packet loop cannot
+    /// tell "not decided yet" from "decided to leave alone" by the absence of an entry. Without this
+    /// it assumes the former and every SYN on the machine waits out the full decision window for an
+    /// answer that already arrived, which measured 8 ms added to every connection an unselected
+    /// application opened - against 0.68 ms with the engine down.
+    /// </para>
+    /// <para>
+    /// Destination and port are kept so a recycled ephemeral port cannot answer for a connection
+    /// that has nothing to do with it. Getting that wrong would be the serious direction of the two:
+    /// a stale row would end a real decision's wait early and let a selected application's SYN out
+    /// un-redirected.
+    /// </para>
+    /// </remarks>
+    public void RecordDirect(ushort localPort, IPAddress destination, ushort destinationPort)
+    {
+        ArgumentNullException.ThrowIfNull(destination);
+        _direct[localPort] = new DirectDecision(destination, destinationPort, _time.GetUtcNow());
+    }
+
+    /// <summary>Looks up a live "leave alone" decision, treating an expired one as absent.</summary>
+    public bool TryGetDirect(ushort localPort, out IPAddress destination, out ushort destinationPort)
+    {
+        destination = null!;
+        destinationPort = 0;
+
+        if (!_direct.TryGetValue(localPort, out var found))
+        {
+            return false;
+        }
+
+        if (_time.GetUtcNow() - found.CreatedAt > EntryLifetime)
+        {
+            _direct.TryRemove(localPort, out _);
+            return false;
+        }
+
+        destination = found.Destination;
+        destinationPort = found.Port;
+        return true;
+    }
+
     /// <summary>Forgets a connection, normally when its socket closes.</summary>
-    public bool Remove(ushort localPort) => _entries.TryRemove(localPort, out _);
+    /// <remarks>
+    /// Both halves go together. A close that forgot only one of them would leave the other to answer
+    /// for whichever connection inherits the port next.
+    /// </remarks>
+    public bool Remove(ushort localPort)
+    {
+        var removedDirect = _direct.TryRemove(localPort, out _);
+        return _entries.TryRemove(localPort, out _) || removedDirect;
+    }
 
     /// <summary>Drops expired rows. Called periodically rather than on every lookup.</summary>
     public int Sweep()
@@ -129,11 +182,28 @@ public sealed class NatTable(TimeProvider? timeProvider = null)
             }
         }
 
+        foreach (var (port, decision) in _direct)
+        {
+            if (decision.CreatedAt < cutoff && _direct.TryRemove(port, out _))
+            {
+                removed++;
+            }
+        }
+
         return removed;
     }
 
     /// <summary>Forgets everything. Used when routing stops.</summary>
-    public void Clear() => _entries.Clear();
+    public void Clear()
+    {
+        _entries.Clear();
+        _direct.Clear();
+    }
+
+    private readonly record struct DirectDecision(
+        IPAddress Destination,
+        ushort Port,
+        DateTimeOffset CreatedAt);
 
     /// <summary>Builds an entry from a routing decision and a socket-layer event.</summary>
     public static NatEntry EntryFor(

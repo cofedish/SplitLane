@@ -48,7 +48,7 @@ and the packet path is a NAT-table lookup keyed on the source port. See `docs/NE
 ```powershell
 cd windows
 dotnet build SplitLane.Windows.slnx
-dotnet test  SplitLane.Windows.slnx          # 322 tests, no network/driver/elevation needed
+dotnet test  SplitLane.Windows.slnx          # 327 tests, no network/driver/elevation needed
 
 SplitLane.Engine.exe --check                 # why the divert layer will not start
 SplitLane.Engine.exe --no-divert             # everything except interception
@@ -58,6 +58,15 @@ SplitLane.Engine.exe                         # needs an elevated prompt
 .\tools\uiprobe\uiprobe.ps1 -Exe ... -OutDir ... -Steps @("click:NavProxy","shot:proxy")
 ```
 
+```powershell
+.\tools\verify-divert.ps1                    # does one connection reach the proxy
+.\tools\stress-divert.ps1 -Apps 6 -Requests 100 -Concurrency 25 -PayloadKb 1024
+.\tools\measure-direct-cost.ps1              # what an unselected application pays, in ms
+```
+
+The last two need an elevated prompt and clean up after themselves. Each prints which engine binary
+it ran and when it was built, because a stale one once made a fix look like it did nothing.
+
 `uiprobe` drives the app through UI Automation by `AutomationId` and captures screenshots. Because it
 prefers automation patterns over synthetic clicks, anything it cannot reach a screen reader cannot
 reach either — that is how the bug was found where selecting a sidebar item moved the highlight
@@ -65,7 +74,7 @@ without changing the page.
 
 ## State
 
-Core, engine and app are written, build with zero warnings, and 322 tests pass. The app has been run,
+Core, engine and app are written, build with zero warnings, and 327 tests pass. The app has been run,
 driven end to end, and screenshotted. The engine has been run in `--no-divert` mode and its control
 channel, rule engine, redirect listener and SOCKS5 relay verified against a real proxy.
 
@@ -85,6 +94,25 @@ time — **in this codebase a silent failure is the bug**:
   queues on separate threads. When the packet loop won, the SYN went out un-redirected and the
   *later* packets were rewritten, breaking an established connection. Only a packet capture found it.
   A SYN now waits briefly for its decision, and a connection is only redirected if its SYN was.
+
+**It holds up under load.** Six applications at once, 100 requests each, 25 in flight, 1 MB
+responses: 600/600 proxied, every payload intact, 600 MB at 20 MB/s, no send failures, and the
+unselected control 0/100 - it was aimed at TEST-NET, which routes nowhere, so a control that
+succeeded would have meant traffic reaching a destination without the proxy. `tools/stress-divert.ps1`.
+
+The load test then found a cost nobody had measured. A SYN with no routing decision waits for one,
+and a DIRECT decision was recorded nowhere, so the packet loop could not tell "not decided yet" from
+"decided to leave alone" - and every connection an unselected application opened waited out the full
+window. Measured: **8.16 ms per connection, against 0.68 ms with the engine down**. Decisions that
+produce no redirect are now recorded too, with their destination so a recycled port cannot answer for
+someone else's connection. Same probe afterwards: **0.14 ms**, and the timeout counter across a full
+load run went from 19 to 0 while the two genuinely racing SYNs still waited and still got their
+answer. `tools/measure-direct-cost.ps1`.
+
+That measurement was nearly lost to the tooling: the scripts ran a fixed path under `bin\Debug` while
+the solution build writes to `bin\x64\Debug`, so the fix measured identical to the code it replaced.
+The tools now take the newest engine binary and print its build time - see `tools/engine-binary.ps1`.
+A stale binary is forgivable; one that passes for a result is not.
 
 Packaged applications (W-4) now warn in the UI, and there is an MSI plus a GitHub Actions pipeline
 that builds it. Not written: a Windows service host, and code signing.

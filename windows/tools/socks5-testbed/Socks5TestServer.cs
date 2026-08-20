@@ -24,6 +24,21 @@ public sealed record Socks5TestServerOptions
     public bool StallAfterGreeting { get; init; }
 
     /// <summary>
+    /// Answer requests from the server itself instead of dialling the destination.
+    /// </summary>
+    /// <remarks>
+    /// Set to a payload size in bytes to make the server behave as the origin as well as the proxy.
+    ///
+    /// <para>
+    /// This is what makes a load test provable. The destination can then be an address that does not
+    /// exist - TEST-NET, say - which is reachable only by going through the proxy. An application
+    /// that succeeds must have been proxied, and one that fails must have gone DIRECT, so the
+    /// control case needs no interpretation.
+    /// </para>
+    /// </remarks>
+    public int? ServePayloadBytes { get; init; }
+
+    /// <summary>
     /// Append these bytes to the CONNECT reply, in the same segment.
     /// </summary>
     /// <remarks>
@@ -202,6 +217,15 @@ public sealed class Socks5TestServer : IAsyncDisposable
                 return;
             }
 
+            if (_options.ServePayloadBytes is { } payloadSize)
+            {
+                // Accept the tunnel, then answer as the origin would. The destination is never
+                // dialled, so it does not have to exist.
+                await client.SendAsync(Reply(0x00), cancellationToken).ConfigureAwait(false);
+                await ServePayloadAsync(client, payloadSize, cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
             upstream = new Socket(SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
 
             try
@@ -239,6 +263,69 @@ public sealed class Socks5TestServer : IAsyncDisposable
         {
             upstream?.Dispose();
             client.Dispose();
+        }
+    }
+
+    /// <summary>Reads an HTTP request and answers it with a payload of the requested size.</summary>
+    private static async Task ServePayloadAsync(Socket client, int payloadSize, CancellationToken cancellationToken)
+    {
+        var buffer = new byte[8192];
+        var request = new StringBuilder();
+
+        // Read to the end of the headers. One receive is not enough: under load a request arrives
+        // split across segments, and stopping early would answer a request nobody finished sending.
+        while (!request.ToString().Contains("\r\n\r\n", StringComparison.Ordinal))
+        {
+            var read = await client.ReceiveAsync(buffer, cancellationToken).ConfigureAwait(false);
+            if (read == 0)
+            {
+                return;
+            }
+
+            request.Append(Encoding.ASCII.GetString(buffer, 0, read));
+
+            if (request.Length > 16384)
+            {
+                return;
+            }
+        }
+
+        var payload = new byte[payloadSize];
+        Random.Shared.NextBytes(payload);
+
+        var header = Encoding.ASCII.GetBytes(
+            "HTTP/1.1 200 OK\r\n" +
+            "Content-Type: application/octet-stream\r\n" +
+            $"Content-Length: {payloadSize}\r\n" +
+            "Connection: close\r\n" +
+            "\r\n");
+
+        await SendAllAsync(client, header, cancellationToken).ConfigureAwait(false);
+        await SendAllAsync(client, payload, cancellationToken).ConfigureAwait(false);
+
+        try
+        {
+            client.Shutdown(SocketShutdown.Send);
+        }
+        catch (SocketException)
+        {
+        }
+    }
+
+    private static async Task SendAllAsync(Socket socket, byte[] data, CancellationToken cancellationToken)
+    {
+        var sent = 0;
+        while (sent < data.Length)
+        {
+            var written = await socket.SendAsync(data.AsMemory(sent), SocketFlags.None, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (written == 0)
+            {
+                return;
+            }
+
+            sent += written;
         }
     }
 
