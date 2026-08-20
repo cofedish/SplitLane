@@ -109,7 +109,8 @@ internal static class Program
         if (!library)
         {
             Console.WriteLine();
-            Console.WriteLine("Run tools\\fetch-windivert.ps1 to download the driver next to the engine.");
+            Console.WriteLine("It ships with SplitLane, so this is a damaged install: repair it, or run");
+            Console.WriteLine("Tools\\fetch-windivert.ps1 from the install folder.");
             return 3;
         }
 

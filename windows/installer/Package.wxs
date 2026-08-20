@@ -6,10 +6,10 @@
 
     Three things this deliberately does NOT do:
 
-      1. It does not bundle WinDivert. The driver is third-party, dual-licensed, and this repository
-         has not chosen a licence of its own yet — redistributing someone else's kernel driver from
-         an unlicensed project is not a decision an installer should make quietly. The fetch script
-         is installed alongside instead, and the engine's preflight mode points at it. See ADR W-0001.
+      1. It ships WinDivert, and its licence with it. The driver is third-party and dual-licensed
+         under LGPL v3 or GPL v2; the terms are installed unmodified next to the binaries and named
+         in THIRD-PARTY-NOTICES.txt at the root. It used to be fetched by hand after installing,
+         which meant installing SplitLane did not give you a working SplitLane. See ADR W-0009.
 
       2. It does not install a shortcut for the engine. It used to, and that shortcut was the whole
          problem: starting SplitLane meant right-clicking one executable to run it as administrator
@@ -136,19 +136,21 @@
       </Component>
 
       <!--
-        The divert driver is fetched after installation, never shipped in the package (ADR W-0001),
-        so Windows does not know the installer is responsible for it and an uninstall leaves it
-        behind. Leaving a stray file would be untidy; leaving a kernel-mode driver on disk after
-        someone has removed the program is a different thing, and it was still sitting in the Engine
-        folder after a real uninstall was verified by hand.
+        The driver is part of the package now (ADR W-0009), so Windows removes it like any other
+        installed file. This stays for the machine that fetched it by hand before upgrading, and for
+        anyone who replaces it with their own build of the same version - which the LGPL entitles
+        them to do, and which would otherwise leave a kernel-mode driver on disk after the program
+        that brought it had been removed.
 
-        Named explicitly rather than by wildcard: this removes what fetch-windivert.ps1 puts there
-        and nothing else.
+        Named explicitly rather than by wildcard: it takes what fetch-windivert.ps1 puts there and
+        nothing else.
       -->
       <Component Id="RemoveFetchedDriver" Directory="EngineFolder" Guid="*">
         <RemoveFile Id="RemoveWinDivertDll" Name="WinDivert.dll" On="uninstall" />
         <RemoveFile Id="RemoveWinDivertSys64" Name="WinDivert64.sys" On="uninstall" />
         <RemoveFile Id="RemoveWinDivertSys32" Name="WinDivert32.sys" On="uninstall" />
+        <RemoveFile Id="RemoveWinDivertLicence" Name="WinDivert-LICENSE.txt" On="uninstall" />
+        <RemoveFile Id="RemoveWinDivertVersion" Name="WinDivert-VERSION.txt" On="uninstall" />
         <RemoveFolder Id="RemoveEngineFolder" Directory="EngineFolder" On="uninstall" />
         <RegistryValue Root="HKCU" Key="Software\SplitLane" Name="driverCleanup"
                        Type="integer" Value="1" KeyPath="yes" />

@@ -41,9 +41,34 @@
 [CmdletBinding()]
 param(
     [string]$Version = '2.2.2',
-    [string]$Destination = (Join-Path $PSScriptRoot '..\runtime\windivert'),
-    [string]$Sha256 = ''
+    [string]$Destination = '',
+
+    # Pinned, and checked by default. The driver now ships inside the installer, so what this
+    # downloads is what gets handed to other people's kernels - "trust whatever the URL served
+    # today" stopped being an acceptable default the moment that became true.
+    #
+    # Recorded from the published 2.2.2 archive, 405137 bytes. Change it only together with
+    # -Version, and only after checking the new value against the WinDivert release.
+    [string]$Sha256 = '63CB41763BB4B20F600B6DE04E991A9C2BE73279E317D4D82F237B150C5F3F15'
 )
+
+# Where the driver belongs depends on which layout this script is sitting in.
+#
+#   <repo>/windows/tools/          -> ../runtime/windivert, which the engine project copies from
+#   <install>/Tools/               -> ../Engine, which is where the engine looks
+#
+# It used to always assume the first. Run from an installed copy - which is exactly what the
+# engine's own error message told people to do - it put the driver in a folder nothing reads, and
+# the application went on reporting that the driver was missing.
+if (-not $Destination) {
+    $installedEngine = Join-Path $PSScriptRoot '..\Engine'
+    $Destination = if (Test-Path (Join-Path $installedEngine 'SplitLane.Engine.exe')) {
+        $installedEngine
+    }
+    else {
+        Join-Path $PSScriptRoot '..\runtime\windivert'
+    }
+}
 
 $ErrorActionPreference = 'Stop'
 
@@ -114,6 +139,21 @@ foreach ($name in $wanted) {
     if (-not (Test-Path $source)) { throw "$name is missing from the archive." }
     Copy-Item -Path $source -Destination $Destination -Force
     Write-Host "  copied $name"
+}
+
+# The licence travels with the binaries, always. WinDivert is LGPLv3 or GPLv2, and both require the
+# terms to accompany it - so a copy that arrives without them is not a copy anyone may pass on.
+$licence = Get-ChildItem -Path $extracted -Recurse -File | Where-Object { $_.Name -eq 'LICENSE' } | Select-Object -First 1
+if (-not $licence) { throw 'The archive contains no LICENSE. Refusing to install a driver without its terms.' }
+Copy-Item -Path $licence.FullName -Destination (Join-Path $Destination 'WinDivert-LICENSE.txt') -Force
+Write-Host '  copied WinDivert-LICENSE.txt'
+
+# Upstream's own statement of its version, carried alongside so the notice that names it in the
+# package quotes the archive rather than a number written down somewhere else and left to drift.
+$versionFile = Get-ChildItem -Path $extracted -Recurse -File | Where-Object { $_.Name -eq 'VERSION' } | Select-Object -First 1
+if ($versionFile) {
+    Copy-Item -Path $versionFile.FullName -Destination (Join-Path $Destination 'WinDivert-VERSION.txt') -Force
+    Write-Host '  copied WinDivert-VERSION.txt'
 }
 
 Write-Host ''

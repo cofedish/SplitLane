@@ -22,6 +22,9 @@ public partial class MainWindow : Window
 
         Loaded += async (_, _) =>
         {
+            // The first page goes up without a transition. Fading in a page while the window itself
+            // is fading in reads as one thing struggling rather than two things arriving.
+            Pages.Show(_model.CurrentPage);
             PlayEntrance();
             await _model.StartAsync().ConfigureAwait(true);
         };
@@ -51,11 +54,13 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Routes the content host through its cross-fade instead of letting the binding swap instantly.
+    /// Drives the content host's cross-fade when the view model changes page.
     /// </summary>
     /// <remarks>
-    /// The host's <c>Content</c> is bound, so a plain binding update would replace the page with no
-    /// transition at all. Intercepting the change here keeps the view model ignorant of animation.
+    /// The host's <c>Content</c> is deliberately unbound. With a binding the page changed the moment
+    /// the property did, and the fade-out then played on the page that had already arrived - which
+    /// looked like the new page flickering out and back rather than a transition between two.
+    /// Driving it from here keeps the view model ignorant of animation, which was always the point.
     /// </remarks>
     private void OnModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {

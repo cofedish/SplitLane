@@ -87,8 +87,13 @@ that `swift test` works without Xcode.
 
 ## Run
 
+**Installed**, there is nothing to run: the MSI includes the divert driver and registers the engine
+as a service that starts with Windows. Open SplitLane and it is already routing.
+
+From a source checkout the driver is not in the tree and the engine is not a service, so:
+
 ```powershell
-# 1. Fetch the divert driver (once).
+# 1. Fetch the divert driver (once). Verified against a pinned hash.
 .\tools\fetch-windivert.ps1
 
 # 2. Check the machine can actually load it. Runs unelevated on purpose.

@@ -77,20 +77,58 @@ dotnet publish $engineProject -c $Configuration -r win-x64 --self-contained true
     "-p:Version=$Version" @publishFlags -o $engineOut
 if ($LASTEXITCODE -ne 0) { throw 'Publishing SplitLane.Engine failed.' }
 
-# The driver never goes in the package, and this is where that gets enforced rather than assumed.
+# The driver ships inside the package, and this is where that is made certain.
 #
-# The engine project copies runtime/windivert next to its output when the folder is there, which is
-# what makes F5 work on a development machine. A publish carries that along, so a package built by
-# hand on a machine that had fetched the driver quietly redistributed somebody else's signed kernel
-# driver - while CI, which has no such folder, produced a package without it. Two builds of the same
-# tag that differ in what they redistribute is not a difference to discover later.
+# It used to be fetched by hand after installing, which kept a third-party kernel driver out of a
+# repository that has not chosen a licence - but it also meant a product that did not work when
+# installed. Somebody who runs an installer has installed the thing; being handed a PowerShell
+# script and a path afterwards is not a product.
 #
-# See ADR W-0001. The fetch script ships instead, and the engine's preflight points at it.
-$bundledDriver = @(Get-ChildItem $engineOut -Filter 'WinDivert*' -File -ErrorAction SilentlyContinue)
-if ($bundledDriver.Count -gt 0) {
-    Write-Host ("  removing {0} driver file(s) from the publish - not ours to redistribute" -f $bundledDriver.Count) -ForegroundColor Yellow
-    $bundledDriver | Remove-Item -Force
+# So it is downloaded here, from the official release, pinned by SHA-256, with its licence carried
+# alongside. WinDivert is LGPLv3 or GPLv2 and may be redistributed on those terms; the terms travel
+# with it, unmodified, and the notice at the install root says what it is and where it came from.
+# See ADR W-0009, which supersedes the fetch-it-yourself half of W-0001.
+$driverFiles = @('WinDivert.dll', 'WinDivert64.sys', 'WinDivert-LICENSE.txt')
+$missing = @($driverFiles | Where-Object { -not (Test-Path (Join-Path $engineOut $_)) })
+
+if ($missing.Count -gt 0) {
+    Write-Host ''
+    Write-Host 'Fetching the divert driver into the publish...'
+    & (Join-Path $PSScriptRoot 'fetch-windivert.ps1') -Destination $engineOut
+    if ($LASTEXITCODE -ne 0) { throw 'Fetching WinDivert failed.' }
 }
+
+foreach ($name in $driverFiles) {
+    if (-not (Test-Path (Join-Path $engineOut $name))) {
+        throw "$name is not in the publish. The package must not ship a driver without it."
+    }
+}
+
+$driverVersion = (Get-Content (Join-Path $engineOut 'WinDivert-VERSION.txt') -ErrorAction SilentlyContinue |
+    Select-Object -First 1)
+if (-not $driverVersion) { throw 'WinDivert-VERSION.txt is missing; the notice would name no version.' }
+
+# A notice at the root, where somebody looking for "what else is in here" would look, rather than
+# only next to the binary it describes.
+$notice = @(
+    'Third-party software included with SplitLane'
+    '============================================'
+    ''
+    # Upstream's own words, from the archive's README and VERSION. A notice about somebody else's
+    # copyright is not a place to paraphrase, and an earlier draft of this named an author who does
+    # not appear anywhere in what WinDivert actually ships.
+    'WinDivert ' + $driverVersion
+    '  Written by basil <basil@reqrypt.org>'
+    '  https://github.com/basil00/WinDivert'
+    '  Licensed under LGPL v3 or GPL v2. The full terms are in'
+    '  Engine' + [char]92 + 'WinDivert-LICENSE.txt, distributed unmodified with the binaries.'
+    ''
+    '  WinDivert.dll and WinDivert64.sys are redistributed unmodified. SplitLane calls the'
+    '  library through P/Invoke and does not link it statically, so it can be replaced with'
+    '  another build of the same version.'
+) -join [Environment]::NewLine
+
+Set-Content -Path (Join-Path $appOut 'THIRD-PARTY-NOTICES.txt') -Value $notice -Encoding utf8
 
 Write-Host ''
 Write-Host 'Building the MSI...'

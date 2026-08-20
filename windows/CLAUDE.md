@@ -43,10 +43,11 @@ and the packet path is a NAT-table lookup keyed on the source port. See `docs/NE
   ask it to do is `EngineRequestKind`, nine members, none of which names a file, a command or a
   library. The control channel's ACL was built for this: LocalSystem full control, interactive user
   read and write, so neither side gains anything from the other.
-- The **driver is never in the package**. The engine project copies it next to its output when it is
-  present, which is what makes a development build work; `build-installer.ps1` deletes it from the
-  publish before packaging. Without that, a package built by hand redistributed a third-party kernel
-  driver while CI's did not — two builds of one tag differing in what they ship (ADR W-0001).
+- The **driver is in the package, and so is its licence** (ADR W-0009). `build-installer.ps1`
+  fetches it against a pinned SHA-256 and refuses to produce a package without
+  `WinDivert-LICENSE.txt` beside the binaries. WinDivert is LGPLv3 or GPLv2, redistributed
+  unmodified and reached through P/Invoke; `THIRD-PARTY-NOTICES.txt` names it, quoting
+  upstream rather than paraphrasing it.
 - Packet rewriting and checksums stay in **pure functions over a buffer** with no WinDivert types in
   the signature. A NAT bug produces a silently hanging connection, not an error, so it has to be
   reachable from a unit test.
@@ -64,7 +65,7 @@ SplitLane.Engine.exe --check                 # why the divert layer will not sta
 SplitLane.Engine.exe --no-divert             # everything except interception
 SplitLane.Engine.exe                         # needs an elevated prompt
 
-.\tools\fetch-windivert.ps1                  # downloads the driver, prints its hash to verify
+.\tools\fetch-windivert.ps1                  # source checkouts only; the package ships it
 .\tools\uiprobe\uiprobe.ps1 -Exe ... -OutDir ... -Steps @("click:NavProxy","shot:proxy")
 ```
 

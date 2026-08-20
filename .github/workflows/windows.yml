@@ -207,17 +207,17 @@ jobs:
 
             ### Install
 
-            Run the MSI, or unpack the portable archive anywhere. Then:
+            Run the MSI and open **SplitLane**. That is the whole procedure: the divert driver is
+            included, and the engine is installed as a service that starts with Windows.
+
+            The portable archive works the same way, except that nothing registers a service — run
+            `Engine\SplitLane.Engine.exe` from an elevated prompt before opening the app.
+
+            To see why the divert layer will not start on a particular machine:
 
             ```powershell
-            # Fetch the divert driver. It is not bundled - see docs/adr/0001.
-            & "C:\Program Files\SplitLane\Tools\fetch-windivert.ps1"
-
-            # Check the machine can load it. Runs unelevated on purpose.
             & "C:\Program Files\SplitLane\Engine\SplitLane.Engine.exe" --check
             ```
-
-            Start **SplitLane Engine** as administrator, then **SplitLane** normally.
 
             ### Before you install
 

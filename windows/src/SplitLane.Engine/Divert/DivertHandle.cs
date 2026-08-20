@@ -34,7 +34,9 @@ public sealed class DivertException(DivertFailureKind kind, string message, Exce
     public string Remedy => Kind switch
     {
         DivertFailureKind.LibraryMissing =>
-            "Run tools\\fetch-windivert.ps1 to download the WinDivert driver next to SplitLane.Engine.exe.",
+            "WinDivert.dll should have been installed next to SplitLane.Engine.exe. Repair or " +
+            "reinstall SplitLane, or run Tools\\fetch-windivert.ps1 from the install folder to put " +
+            "it back.",
         DivertFailureKind.DriverUnavailable =>
             "The WinDivert driver could not start. Check that Secure Boot allows it and that no other " +
             "network filter is holding it open.",

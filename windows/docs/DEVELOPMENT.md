@@ -104,7 +104,9 @@ toolchain that must be restored before MSBuild can parse the file, and including
 Three things the installer does not do, each on purpose:
 
 - **It does not bundle WinDivert.** The driver is third-party, dual-licensed, and this repository has
-  not chosen a licence of its own. `fetch-windivert.ps1` is installed alongside instead.
+  not chosen a licence of its own. **Superseded by ADR W-0009**: the packaged product ships it,
+  with its licence, because an installer that leaves you without a working program is not an
+  installer. `fetch-windivert.ps1` is still how a source checkout gets one.
 - **It does not register a service.** There is no service host yet.
 - **It carries no licence dialog**, because there is no licence. Every stock WiX UI set includes one,
   so the MSI ships with the basic progress UI rather than presenting terms that do not exist.

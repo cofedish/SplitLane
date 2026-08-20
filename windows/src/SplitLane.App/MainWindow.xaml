@@ -327,8 +327,13 @@
                 </Border>
 
                 <!-- Pages -->
-                <infra:PageHost x:Name="Pages" Grid.Row="3" Margin="40,0,40,0"
-                                Content="{Binding CurrentPage}" />
+                <!--
+                    Content is deliberately not bound. A binding would set the new page the instant
+                    the view model changed, so the fade-out would run on the page that had already
+                    replaced the one it was meant to be dismissing - the current page vanishing and
+                    reappearing in place. The window drives the swap instead; see PageHost.
+                -->
+                <infra:PageHost x:Name="Pages" Grid.Row="3" Margin="40,0,40,0" />
 
                 <!-- The save bar exists only when there is something to save, so it never nags. -->
                 <Border Grid.Row="4" Padding="40,18"
