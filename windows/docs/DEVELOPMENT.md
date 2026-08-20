@@ -249,3 +249,5 @@ docs/screenshots/            captures of the running application
   its own signature rather than ours.
 - Interception has been verified on IPv4 only. IPv6, sleep and resume, and adapter changes mid-flow
   are untested.
+- The installer has been installed, driven and uninstalled by hand on one machine, on Windows 11.
+  No other version of Windows has run it.

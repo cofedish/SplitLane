@@ -114,8 +114,20 @@ the solution build writes to `bin\x64\Debug`, so the fix measured identical to t
 The tools now take the newest engine binary and print its build time - see `tools/engine-binary.ps1`.
 A stale binary is forgivable; one that passes for a result is not.
 
-Packaged applications (W-4) now warn in the UI, and there is an MSI plus a GitHub Actions pipeline
-that builds it. Not written: a Windows service host, and code signing.
+**The installer has been installed.** The MSI from CI was verified against its published hash,
+installed, and the installed product driven end to end: the app launched, the engine started from
+`C:\Program Files\SplitLane\Engine`, loaded WinDivert 2.2, bound its redirect listener, and the app
+showed it as routing. Then uninstalled and the machine checked clean.
+
+That found one defect. The driver is fetched after installation and never shipped (ADR W-0001), so
+Windows does not consider the installer responsible for it - and an uninstall left a kernel-mode
+driver on disk. The uninstall now removes it by name along with the Engine folder.
+
+Released as `v0.1.0`: MSI, portable archive and `SHA256SUMS.txt`, built by the pipeline from the
+tag. The release path is no longer theoretical - the download's hash was checked against the
+published one.
+
+Not written: a Windows service host, and code signing.
 
 The live run also found three bugs of one family — failures that reported nothing. A failed
 `WinDivertRecv` was slept through, a failed `WinDivertSend` was discarded, and console logging could
