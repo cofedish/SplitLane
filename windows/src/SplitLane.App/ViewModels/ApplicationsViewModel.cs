@@ -32,6 +32,10 @@ public sealed class ApplicationsViewModel : ObservableObject
             {
                 // Re-describe with the signature, which the bulk scan skipped for speed.
                 Add(ApplicationInspector.Describe(candidate.Identity.ExecutablePath, candidate.DisplayName));
+
+                // The picker stays open so several can be added in one go, which only works if what
+                // was just added stops being offered.
+                Raise(nameof(VisibleCandidates));
             }
         });
         RemoveCommand = new RelayCommand(parameter =>
@@ -58,12 +62,43 @@ public sealed class ApplicationsViewModel : ObservableObject
     /// <summary>Running applications offered by the picker.</summary>
     public ObservableCollection<ApplicationCandidate> Candidates { get; } = [];
 
-    /// <summary>Candidates matching the picker's search box.</summary>
-    public IEnumerable<ApplicationCandidate> VisibleCandidates => string.IsNullOrWhiteSpace(PickerFilter)
-        ? Candidates
-        : Candidates.Where(candidate =>
-            candidate.DisplayName.Contains(PickerFilter, StringComparison.OrdinalIgnoreCase) ||
-            candidate.Path.Contains(PickerFilter, StringComparison.OrdinalIgnoreCase));
+    /// <summary>
+    /// Candidates matching the picker's search box, minus anything already routed.
+    /// </summary>
+    /// <remarks>
+    /// Offering an application that is already in the list invites a second click that can only
+    /// produce "it is already in the list", and leaves the picker looking like it did nothing. What
+    /// counts as already routed includes being covered by somebody else's family rule: an Electron
+    /// application's helpers all sit under one root, and listing five of them under a rule that
+    /// already matches all five is noise.
+    /// </remarks>
+    public IEnumerable<ApplicationCandidate> VisibleCandidates =>
+        Candidates.Where(candidate => !IsAlreadyRouted(candidate) &&
+            (string.IsNullOrWhiteSpace(PickerFilter) ||
+             candidate.DisplayName.Contains(PickerFilter, StringComparison.OrdinalIgnoreCase) ||
+             candidate.Path.Contains(PickerFilter, StringComparison.OrdinalIgnoreCase)));
+
+    private bool IsAlreadyRouted(ApplicationCandidate candidate)
+    {
+        var path = candidate.Identity.ExecutablePath;
+
+        foreach (var rule in Rules)
+        {
+            if (ExecutablePath.Comparer.Equals(rule.ExecutablePath, path))
+            {
+                return true;
+            }
+
+            if (rule.MatchMode == MatchMode.ExecutableFamily &&
+                rule.SupportsFamilyMatching &&
+                ExecutablePath.IsUnderFamilyRoot(path, rule.Identity.FamilyRoot))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     /// <summary>Opens the running-applications picker.</summary>
     public AsyncRelayCommand OpenPickerCommand { get; }
@@ -132,8 +167,16 @@ public sealed class ApplicationsViewModel : ObservableObject
         ? "No applications selected — everything on this machine is DIRECT."
         : $"{ProxiedCount} of {Rules.Count} in the proxy lane. Everything else is DIRECT.";
 
-    /// <summary>How many rules name an executable that is no longer there.</summary>
-    public int StaleCount => Rules.Count(rule => rule.ExecutableIsMissing);
+    /// <summary>
+    /// How many rules have actually stopped matching anything.
+    /// </summary>
+    /// <remarks>
+    /// Not simply "the executable is gone". A self-updating application deletes the build it was
+    /// selected in and runs from a new directory beside it, which a family rule follows - the named
+    /// file is missing and the rule is working. Counting those raised a banner telling the user to
+    /// go and repair rules that were routing traffic correctly.
+    /// </remarks>
+    public int StaleCount => Rules.Count(rule => rule.HasStoppedMatching);
 
     /// <summary>Whether to raise the banner about rules that have stopped matching.</summary>
     public bool HasStaleRules => StaleCount > 0;
@@ -160,12 +203,19 @@ public sealed class ApplicationsViewModel : ObservableObject
             try
             {
                 row.ExecutableIsMissing = !File.Exists(row.ExecutablePath);
+
+                // Asked separately, because for a self-updating application the two answers differ:
+                // the named executable is gone and the family it belongs to is still there, being
+                // matched, working. Reporting only the first sends someone to repair that.
+                var familyRoot = row.Identity.FamilyRoot;
+                row.FamilyRootExists = !string.IsNullOrEmpty(familyRoot) && Directory.Exists(familyRoot);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
             {
                 // An unreadable path is not evidence the file is gone, and claiming it is would send
                 // the user chasing a rule that works.
                 row.ExecutableIsMissing = false;
+                row.FamilyRootExists = true;
             }
 
             Rules.Add(row);

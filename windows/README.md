@@ -78,7 +78,7 @@ machine the engine sees every outbound packet. See [docs/NETWORKING.md](docs/NET
 cd windows
 
 dotnet build SplitLane.Windows.slnx      # everything
-dotnet test  SplitLane.Windows.slnx      # 327 tests, no network, no driver, no elevation
+dotnet test  SplitLane.Windows.slnx      # 344 tests, no network, no driver, no elevation
 ```
 
 `SplitLane.Core` targets plain `net10.0`, has no package references and P/Invokes nothing, so the

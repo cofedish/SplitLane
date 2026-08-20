@@ -117,4 +117,60 @@ public sealed class ExecutablePathTests
     [InlineData("", "")]
     public void FileNameIsTheLastSegment(string path, string expected) =>
         Assert.Equal(expected, ExecutablePath.FileName(path));
+
+    [Theory]
+    // Squirrel, which is what Discord, Slack and Teams all ship. The family is the application's
+    // directory, not the directory of whichever build happened to be installed when it was picked.
+    [InlineData(@"C:\Users\ann\AppData\Local\Discord\app-1.0.9250\Discord.exe",
+                @"C:\Users\ann\AppData\Local\Discord")]
+    [InlineData(@"C:\Users\ann\AppData\Local\Discord\app-1.0.9254\Discord.exe",
+                @"C:\Users\ann\AppData\Local\Discord")]
+    // A bare version directory, the other common shape.
+    [InlineData(@"C:\Program Files\Vendor\Thing\2.14.1\thing.exe",
+                @"C:\Program Files\Vendor\Thing")]
+    public void FamilyRootClimbsOutOfAVersionedDirectory(string path, string expected) =>
+        Assert.Equal(expected, ExecutablePath.FamilyRoot(path));
+
+    [Fact]
+    public void AnUpdatedApplicationStillMatchesTheFamilyItWasSelectedIn()
+    {
+        // The defect this exists for, in one assertion. Discord was selected at 9250 and updated
+        // itself to 9254; the rule stayed, looked correct, and quietly stopped matching.
+        var selected = ExecutablePath.FamilyRoot(
+            @"C:\Users\ann\AppData\Local\Discord\app-1.0.9250\Discord.exe");
+
+        Assert.True(ExecutablePath.IsUnderFamilyRoot(
+            @"C:\Users\ann\AppData\Local\Discord\app-1.0.9254\Discord.exe", selected));
+
+        // And the updater beside them, which is how the application relaunches itself at all.
+        Assert.True(ExecutablePath.IsUnderFamilyRoot(
+            @"C:\Users\ann\AppData\Local\Discord\Update.exe", selected));
+    }
+
+    [Theory]
+    [InlineData("app-1.0.9254", true)]
+    [InlineData("app-1.0", true)]
+    [InlineData("2.14.1", true)]
+    [InlineData("1.0", true)]
+    // A name, not a release. Climbing out of these would widen a family rule for nothing.
+    [InlineData("bin64", false)]
+    [InlineData("v2", false)]
+    [InlineData("app", false)]
+    [InlineData("app-beta", false)]
+    [InlineData("Discord", false)]
+    [InlineData("2", false)]
+    [InlineData("1.0.x", false)]
+    [InlineData("app-1.0.", false)]
+    public void VersionedDirectoriesAreRecognisedNarrowly(string segment, bool expected) =>
+        Assert.Equal(expected, ExecutablePath.IsVersionedDirectory(segment));
+
+    [Fact]
+    public void ClimbingNeverProducesAnUnsafeRoot()
+    {
+        // A versioned directory sitting directly in a shared one. Climbing would hand the family
+        // the whole shared directory, so it does not climb - the fragile answer beats the unsafe one.
+        var root = ExecutablePath.FamilyRoot(@"C:\Program Files\1.2.3\thing.exe");
+
+        Assert.Equal(@"C:\Program Files\1.2.3", root);
+    }
 }

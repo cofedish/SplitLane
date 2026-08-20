@@ -10,6 +10,7 @@ public sealed class AppRuleViewModel : ObservableObject
     private readonly Action _changed;
     private RouteAction _action;
     private MatchMode _matchMode;
+    private bool _familyRootExists = true;
     private bool _isEnabled;
     private bool _executableIsMissing;
 
@@ -52,13 +53,49 @@ public sealed class AppRuleViewModel : ObservableObject
             if (Set(ref _executableIsMissing, value))
             {
                 Raise(nameof(HasWarning));
+                Raise(nameof(HasStoppedMatching));
                 Raise(nameof(WarningText));
             }
         }
     }
 
+    /// <summary>
+    /// Whether the family this rule covers still exists, when it matches by family.
+    /// </summary>
+    /// <remarks>
+    /// Set by the page alongside <see cref="ExecutableIsMissing"/>, and it changes what a missing
+    /// executable means. A self-updating application leaves its old build behind and runs from a new
+    /// directory beside it; a family rule follows it there, so the named executable being gone is
+    /// not a fault, and saying it is would send someone to fix a rule that is working.
+    /// </remarks>
+    public bool FamilyRootExists
+    {
+        get => _familyRootExists;
+        set
+        {
+            if (Set(ref _familyRootExists, value))
+            {
+                Raise(nameof(HasWarning));
+                Raise(nameof(HasStoppedMatching));
+                Raise(nameof(WarningText));
+            }
+        }
+    }
+
+    private bool StillMatchesByFamily =>
+        MatchMode == MatchMode.ExecutableFamily && SupportsFamilyMatching && FamilyRootExists;
+
+    /// <summary>
+    /// Whether this rule now matches nothing at all.
+    /// </summary>
+    /// <remarks>
+    /// The condition the product's central promise turns on: a selected application whose rule no
+    /// longer matches is going DIRECT, and nothing else in the interface would say so.
+    /// </remarks>
+    public bool HasStoppedMatching => ExecutableIsMissing && !StillMatchesByFamily;
+
     /// <summary>Whether this rule needs the user's attention.</summary>
-    public bool HasWarning => ExecutableIsMissing || Identity.IsPackaged;
+    public bool HasWarning => HasStoppedMatching || Identity.IsPackaged;
 
     /// <summary>
     /// What is wrong, in the order that matters.
@@ -71,7 +108,7 @@ public sealed class AppRuleViewModel : ObservableObject
     {
         get
         {
-            if (ExecutableIsMissing)
+            if (ExecutableIsMissing && !StillMatchesByFamily)
             {
                 return Identity.IsPackaged
                     ? "This executable is gone — the app has almost certainly been updated and now " +

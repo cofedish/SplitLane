@@ -806,10 +806,10 @@ public sealed class DivertPipeline : IAsyncDisposable
         _heartbeat?.Dispose();
         _heartbeat = null;
 
-        _socketHandle?.Shutdown();
-        _networkHandle?.Shutdown();
-        _dnsHandle?.Shutdown();
-        _traceHandle?.Shutdown();
+        ShutDownHandle(_socketHandle, "socket");
+        ShutDownHandle(_networkHandle, "network");
+        ShutDownHandle(_dnsHandle, "dns");
+        ShutDownHandle(_traceHandle, "trace");
 
         await Task.WhenAll(
             JoinAsync(_socketThread),
@@ -837,6 +837,18 @@ public sealed class DivertPipeline : IAsyncDisposable
         SplitLaneLog.Info(LogCategory, "divert stopped");
     }
 
+    /// <summary>Unblocks a handle's thread, and says so when it cannot.</summary>
+    private static void ShutDownHandle(DivertHandle? handle, string name)
+    {
+        if (handle is not null && !handle.Shutdown())
+        {
+            SplitLaneLog.Warning(
+                LogCategory,
+                $"the {name} handle refused to shut down (error {handle.LastError}); its thread will " +
+                "not be released until a packet arrives");
+        }
+    }
+
     private static Task JoinAsync(Thread? thread) => thread is null
         ? Task.CompletedTask
         : Task.Run(() =>
@@ -845,7 +857,13 @@ public sealed class DivertPipeline : IAsyncDisposable
             // and a hung shutdown is worse than an abandoned background thread.
             if (!thread.Join(TimeSpan.FromSeconds(5)))
             {
-                SplitLaneLog.Warning(LogCategory, $"thread {thread.Name} did not stop within five seconds");
+                // Not cosmetic. A thread still inside a native call keeps the process alive past the
+                // point the service manager considers it stopped, and an installer replacing that
+                // executable during an upgrade then fails - which is how this was noticed.
+                SplitLaneLog.Warning(
+                    LogCategory,
+                    $"thread {thread.Name} did not stop within five seconds; the process may outlive " +
+                    "its own shutdown");
             }
         });
 }

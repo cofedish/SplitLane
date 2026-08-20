@@ -9,7 +9,7 @@ dotnet build SplitLane.Windows.slnx
 dotnet test  SplitLane.Windows.slnx
 ```
 
-327 tests. None of them needs a network, a driver, elevation, or a daemon to be started first — the
+344 tests. None of them needs a network, a driver, elevation, or a daemon to be started first — the
 SOCKS5 integration tests run against an in-process server in `tools/socks5-testbed`, so they run on
 every `dotnet test` rather than being skipped like the macOS project's Docker-based equivalents.
 

@@ -36,6 +36,11 @@ and the packet path is a NAT-table lookup keyed on the source port. See `docs/NE
 ## Hard rules, Windows-specific
 
 - Routing keys on the **normalised image path** (ADR W-0002). Never on process name.
+- Family matching **climbs out of a versioned directory**. An application selected in
+  `Discordpp-1.0.9250` must still be routed from `Discordpp-1.0.9254`, or every self-update
+  silently drops it back to DIRECT - which is what happened, in front of a user, to Discord. The
+  detection is narrow on purpose (`app-1.2.3` and `1.2.3`, nothing else): every level climbed widens
+  what a family rule captures.
 - Family matching cuts on the **path separator**, and is **refused for shared directories** — a
   family rule on `C:\Windows\System32` would proxy the operating system (ADR W-0003). The check
   appears in three places on purpose; do not remove any of them.
@@ -59,7 +64,7 @@ and the packet path is a NAT-table lookup keyed on the source port. See `docs/NE
 ```powershell
 cd windows
 dotnet build SplitLane.Windows.slnx
-dotnet test  SplitLane.Windows.slnx          # 327 tests, no network/driver/elevation needed
+dotnet test  SplitLane.Windows.slnx          # 344 tests, no network/driver/elevation needed
 
 SplitLane.Engine.exe --check                 # why the divert layer will not start
 SplitLane.Engine.exe --no-divert             # everything except interception
@@ -85,7 +90,7 @@ without changing the page.
 
 ## State
 
-Core, engine and app are written, build with zero warnings, and 327 tests pass. The app has been run,
+Core, engine and app are written, build with zero warnings, and 344 tests pass. The app has been run,
 driven end to end, and screenshotted. The engine has been run in `--no-divert` mode and its control
 channel, rule engine, redirect listener and SOCKS5 relay verified against a real proxy.
 

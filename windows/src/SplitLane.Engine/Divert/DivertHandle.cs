@@ -292,13 +292,28 @@ public sealed class DivertHandle : IDisposable
     /// Closing the handle from another thread while a receive is in flight is not defined; shutting
     /// it down first is. <c>how = 2</c> is <c>WINDIVERT_SHUTDOWN_BOTH</c>.
     /// </remarks>
-    public void Shutdown()
+    public bool Shutdown()
     {
-        if (IsOpen)
+        if (!IsOpen)
         {
-            WinDivertNative.Shutdown(_handle, 2);
+            return true;
         }
+
+        if (WinDivertNative.Shutdown(_handle, 2))
+        {
+            return true;
+        }
+
+        // Worth knowing about rather than absorbing. If this fails, the thread parked in Receive
+        // stays parked until a packet happens to arrive, the bounded join gives up on it, and the
+        // process outlives its own shutdown - which is invisible until an installer tries to
+        // replace the executable of a service it believes has stopped, and fails.
+        LastError = Marshal.GetLastWin32Error();
+        return false;
     }
+
+    /// <summary>The error code from the last failed <see cref="Shutdown"/>, or zero.</summary>
+    public int LastError { get; private set; }
 
     /// <inheritdoc />
     public void Dispose()

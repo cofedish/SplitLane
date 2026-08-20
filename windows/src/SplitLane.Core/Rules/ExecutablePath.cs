@@ -113,7 +113,89 @@ public static class ExecutablePath
     public static string FamilyRoot(string? executablePath)
     {
         var normalized = Normalize(executablePath);
-        return Parent(normalized);
+        var parent = Parent(normalized);
+
+        if (!IsVersionedDirectory(LastSegment(parent)))
+        {
+            return parent;
+        }
+
+        // The executable lives in a directory named after a version, so the family is one level
+        // higher. Otherwise the family of an application is the family of the build it happened to
+        // be running when it was selected, and the next update leaves it behind.
+        //
+        // Observed: Discord was selected at app-1.0.9250, updated itself to app-1.0.9254, and
+        // silently stopped being routed. The rule was still there, still enabled, still looked
+        // right - and matched a directory the application no longer ran from.
+        var above = Parent(parent);
+
+        // Never at the cost of the guard. If climbing lands on something shared, the versioned
+        // directory is the safer answer even though it is the more fragile one.
+        return IsSafeFamilyRoot(above) ? above : parent;
+    }
+
+    /// <summary>
+    /// Whether a directory name is a version rather than a name.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Deliberately narrow. It recognises the two shapes that self-updating applications actually
+    /// use - Squirrel's <c>app-1.0.9254</c>, which Discord, Slack and Teams all ship, and a bare
+    /// <c>1.2.3</c> - and nothing else. A looser test would start climbing out of directories that
+    /// merely have a digit in the name, and every step up widens what a family rule captures.
+    /// </para>
+    /// <para>
+    /// A single number is not enough: <c>bin64</c> or <c>v2</c> name a layout, not a release, and
+    /// a directory that is only ever one release deep does not have the problem this solves.
+    /// </para>
+    /// </remarks>
+    public static bool IsVersionedDirectory(string? segment)
+    {
+        if (string.IsNullOrEmpty(segment))
+        {
+            return false;
+        }
+
+        var digits = segment.StartsWith("app-", StringComparison.OrdinalIgnoreCase)
+            ? segment["app-".Length..]
+            : segment;
+
+        if (digits.Length == 0 || !digits.Contains('.'))
+        {
+            return false;
+        }
+
+        var fields = digits.Split('.');
+        foreach (var field in fields)
+        {
+            if (field.Length == 0)
+            {
+                return false;
+            }
+
+            foreach (var character in field)
+            {
+                if (!char.IsAsciiDigit(character))
+                {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>The last path segment of a normalised path.</summary>
+    private static string LastSegment(string normalizedPath)
+    {
+        if (string.IsNullOrEmpty(normalizedPath))
+        {
+            return string.Empty;
+        }
+
+        var trimmed = normalizedPath.TrimEnd('\\');
+        var separator = trimmed.LastIndexOf('\\');
+        return separator < 0 ? trimmed : trimmed[(separator + 1)..];
     }
 
     /// <summary>The parent directory of a normalised path, or empty when there is none.</summary>
