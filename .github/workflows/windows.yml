@@ -1,19 +1,20 @@
 name: Windows
 
-# The Windows port lives under windows/ and has its own toolchain, so this workflow is scoped to
-# that path. A change to the macOS Swift sources should not spend ten minutes building an MSI.
+# Scoped to the windows branch, deliberately.
+#
+# The Windows port is a separate toolchain living under windows/, and the macOS build in main has
+# nothing to gain from a ten-minute MSI build. Restricting the branch, rather than only the paths,
+# means a merge into main never quietly starts running this.
+#
+# There is no path filter. On a branch that only ever carries Windows work it would add nothing, and
+# path filters interact badly with tag pushes - a release tag can be skipped because the push that
+# carried it touched no matching file.
 on:
   push:
-    branches: [main, windows]
-    paths:
-      - 'windows/**'
-      - '.github/workflows/windows.yml'
+    branches:
+      - windows
     tags:
       - 'v*'
-  pull_request:
-    paths:
-      - 'windows/**'
-      - '.github/workflows/windows.yml'
   workflow_dispatch:
     inputs:
       version:
@@ -28,7 +29,7 @@ env:
 
 jobs:
   # ---------------------------------------------------------------------------------------------
-  # Build and test. Runs on every push and pull request, and gates everything downstream.
+  # Build and test. Gates everything downstream.
   # ---------------------------------------------------------------------------------------------
   test:
     name: Build and test
@@ -59,7 +60,7 @@ jobs:
         working-directory: windows
         run: dotnet build SplitLane.Windows.slnx --configuration Release --no-restore
 
-      # 309 tests, none of which needs a network, a driver, elevation, or a daemon started first.
+      # 322 tests, none of which needs a network, a driver, elevation, or a daemon started first.
       # The SOCKS5 integration tests run against an in-process server, so they run here rather than
       # being skipped the way a Docker-dependent suite would be.
       - name: Test
