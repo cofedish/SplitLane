@@ -69,18 +69,22 @@ Core, engine and app are written, build with zero warnings, and 322 tests pass. 
 driven end to end, and screenshotted. The engine has been run in `--no-divert` mode and its control
 channel, rule engine, redirect listener and SOCKS5 relay verified against a real proxy.
 
-**The divert layer has been run against the driver, and works up to the last hop.** Driver load,
-filter acceptance, `WINDIVERT_ADDRESS` layout, socket-layer events, pid-to-path resolution, the
-routing decision, loop defence, the DNS observer, the NAT table and packet rewriting are all
-confirmed on live traffic. WinDivert accepts every injection.
+**Interception works, verified end to end on a live machine.** A selected application's connection
+reaches the proxy: the upstream logs `CONNECT example.com:80`, the relay reports the handshake, and
+the result is repeatable. The destination arrives as a hostname, so the DNS observer and
+`ATYP=DOMAIN` work too. Reproduce with `tools/verify-divert.ps1`.
 
-**The rewritten loopback packet never reaches the redirect listener.** The connection fails, which is
-at least the right direction to fail in, but a selected application cannot yet be proxied.
+Three bugs stood in the way, all invisible without instrumentation, and the lesson is the same each
+time — **in this codebase a silent failure is the bug**:
 
-Both next steps are built and waiting on an elevated run: a trace sniffer on the redirect port
-(`--trace`) that says whether the injected packet reaches the stack at all, and a second redirect
-shape (`--redirect-local`) that avoids the loopback fast path. Run them with
-`tools/verify-divert.ps1`. See `docs/THREAT_MODEL.md § What a live run established`.
+- Direction was being asserted on reinjection. WinDivert accepts such a packet and the stack discards
+  it, with no error at either end. Rewrite addresses; leave direction alone.
+- A packet whose source is one of the machine's own addresses is rejected as a spoof on a physical
+  interface. Both endpoints must be loopback.
+- **The SYN raced its own routing decision.** The socket event and the packet travel through separate
+  queues on separate threads. When the packet loop won, the SYN went out un-redirected and the
+  *later* packets were rewritten, breaking an established connection. Only a packet capture found it.
+  A SYN now waits briefly for its decision, and a connection is only redirected if its SYN was.
 
 Packaged applications (W-4) now warn in the UI, and there is an MSI plus a GitHub Actions pipeline
 that builds it. Not written: a Windows service host, and code signing.

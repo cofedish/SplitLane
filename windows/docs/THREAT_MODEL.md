@@ -192,33 +192,29 @@ not, because "we tried it" is not a result.
 - The packet layer captures, rewrites and reinjects. WinDivert **accepted** every injection —
   `send failures 0` across every run.
 
-**Still not working, but much more precisely:**
+**It works.** A selected application's traffic reaches the proxy, confirmed from the upstream side:
+the test SOCKS5 server logs `CONNECT example.com:80` and the relay reports
+`relaying curl.exe -> example.com:80 (105ms handshake)`. Repeatable across runs. The destination
+arrives as a hostname rather than an address, so the DNS observer and `ATYP=DOMAIN` are working too.
 
-A selected application's connection does not complete. What the trace established, in order:
+Three things had to be fixed to get there, and each was invisible from the outside:
 
-1. **Loopback shape (`--redirect-loopback`, the default): the injected packet never reaches the
-   stack at all.** The trace sniffer on the redirect port saw nothing, the application's SYN
-   retransmitted for twenty seconds, and the connection timed out. Both injection directions were
-   tried. Windows appears not to accept an injected packet onto the loopback path.
+1. **Direction was being asserted.** A redirected packet was flipped to inbound because "it is going
+   to a socket on this machine", and the reply flipped for the same reason. WinDivert accepts such a
+   packet and the stack discards it, with no error at either end. Leaving the direction exactly as
+   captured and rewriting only the addresses lets the stack route it.
 
-2. **Direction flipping was the mistake, not the addresses.** Asserting a direction — flipping a
-   redirected packet to inbound because "it is going to a socket on this machine" — produces a packet
-   WinDivert accepts and the stack discards. Leaving the direction exactly as captured and rewriting
-   only the addresses lets the stack route it, which is what routing is for: a packet addressed to
-   the machine's own address loops back on its own.
+2. **A packet whose source is one of the machine's own addresses is rejected as a spoof** when it
+   arrives on a physical interface. That ruled out the local-address shape: the stack answered RST
+   and the listener never saw a connection. Both endpoints on loopback satisfies the rule.
 
-3. **With that corrected, the local-address shape (`--redirect-local`) delivers.** The packet now
-   reaches the stack and the stack answers — the trace shows real responses on the redirect port and
-   the application fails in 70 milliseconds instead of timing out after twenty seconds.
-
-4. **The handshake still does not complete.** The response is a RST from the listener's port back to
-   the application. The listener is confirmed bound and listening (`netstat` shows
-   `0.0.0.0:<port> LISTENING`), so a SYN reaching it should be answered with SYN-ACK, not RST.
-
-The remaining question is what the stack does with a segment whose source and destination are the
-same local address. Answering it properly needs a packet capture — `pktmon` or Wireshark on the
-loopback adapter — rather than another round of inference from counters. Everything before that point
-is now confirmed working on live traffic.
+3. **The SYN raced its own routing decision, and lost.** This was the real bug, and only a packet
+   capture found it. Windows generates the socket-layer event before the SYN, but the two travel
+   through separate WinDivert queues on separate threads and arrive in either order. When the packet
+   loop won, the SYN left un-redirected, the connection established with the real server, and the
+   *later* packets got rewritten - the capture showed an ACK and a 75-byte HTTP request being
+   dropped with "transport endpoint was not found". Now a SYN waits up to eight milliseconds for its
+   decision, and a connection is only redirected if its SYN was.
 
 ## Bugs the live run found
 

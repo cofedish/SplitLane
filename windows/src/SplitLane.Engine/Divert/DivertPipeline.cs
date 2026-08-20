@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Net;
 using SplitLane.Core.Logging;
 using SplitLane.Core.Models;
@@ -50,6 +51,17 @@ public sealed class DivertPipeline : IAsyncDisposable
     /// <summary>Interface index of the loopback adapter, which is fixed on Windows.</summary>
     private const uint LoopbackInterfaceIndex = 1;
 
+    /// <summary>
+    /// How long a SYN waits for its routing decision before being let through.
+    /// </summary>
+    /// <remarks>
+    /// Long enough to absorb the scheduling gap between two threads, short enough that a connection
+    /// SplitLane has no interest in is delayed imperceptibly. Letting it through on timeout rather
+    /// than dropping it is deliberate: a dropped SYN breaks an application SplitLane was never asked
+    /// to touch, which is a worse failure than a missed redirect.
+    /// </remarks>
+    private const int DecisionWaitMilliseconds = 8;
+
     private readonly NatTable _nat;
     private readonly DnsObserver _dns;
     private readonly ProcessResolver _processes;
@@ -78,6 +90,9 @@ public sealed class DivertPipeline : IAsyncDisposable
     private long _packetsSeen;
     private long _redirected;
     private long _sendFailures;
+    private long _lateDecisions;
+    private long _decisionsWaitedFor;
+    private long _decisionTimeouts;
     private long _traced;
     private Timer? _heartbeat;
     private DivertHandle? _traceHandle;
@@ -239,6 +254,9 @@ public sealed class DivertPipeline : IAsyncDisposable
                 $"packets {Interlocked.Read(ref _packetsSeen)}, " +
                 $"redirected {Interlocked.Read(ref _redirected)}, " +
                 $"send failures {Interlocked.Read(ref _sendFailures)}, " +
+                $"late {Interlocked.Read(ref _lateDecisions)}, " +
+                $"waited {Interlocked.Read(ref _decisionsWaitedFor)}, " +
+                $"wait timeouts {Interlocked.Read(ref _decisionTimeouts)}, " +
                 $"nat entries {_nat.Count}"),
             null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
 
@@ -472,6 +490,43 @@ public sealed class DivertPipeline : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Waits briefly for the socket pump to record a decision for this port.
+    /// </summary>
+    /// <remarks>
+    /// Spins rather than blocking on a synchronisation primitive. The wait is measured in
+    /// microseconds in the common case - the socket event is usually already in flight - and adding
+    /// a per-port wait handle would cost an allocation on every connection on the machine to save a
+    /// few spins on some of them.
+    /// </remarks>
+    private void WaitForDecision(ushort sourcePort)
+    {
+        var deadline = Stopwatch.GetTimestamp() + (Stopwatch.Frequency * DecisionWaitMilliseconds / 1000);
+        var spins = 0;
+
+        while (Stopwatch.GetTimestamp() < deadline)
+        {
+            if (_nat.TryGet(sourcePort, out _))
+            {
+                Interlocked.Increment(ref _decisionsWaitedFor);
+                return;
+            }
+
+            // Yield rather than burn the core. The socket pump is on another thread and needs one
+            // of these to make progress.
+            if (++spins % 8 == 0)
+            {
+                Thread.Sleep(0);
+            }
+            else
+            {
+                Thread.SpinWait(64);
+            }
+        }
+
+        Interlocked.Increment(ref _decisionTimeouts);
+    }
+
     private enum PacketAction
     {
         /// <summary>Reinject unchanged.</summary>
@@ -503,33 +558,61 @@ public sealed class DivertPipeline : IAsyncDisposable
             return RestoreReply(packet, view, ref address);
         }
 
+        // A SYN may arrive before the socket-layer decision that belongs to it.
+        //
+        // Windows generates the socket event first, but the two travel through separate WinDivert
+        // queues on separate threads, and delivery order between them is not guaranteed. Losing that
+        // race means the connection establishes with its real destination and can no longer be
+        // proxied at all - a silent DIRECT leak, which is the failure this product exists to prevent.
+        //
+        // So a SYN with no decision waits for one, briefly. Only SYNs wait, and only for a few
+        // milliseconds: they are a small fraction of traffic, the cost lands on connection setup
+        // rather than throughput, and a bounded wait cannot stall the packet loop indefinitely.
+        if (view.IsTcpSyn && !_nat.TryGet(view.SourcePort, out _))
+        {
+            WaitForDecision(view.SourcePort);
+        }
+
         // Application traffic that a socket-layer decision already marked for the proxy lane.
         if (_nat.TryGet(view.SourcePort, out var entry) &&
             entry.OriginalDestinationPort == view.DestinationPort &&
             AddressMatches(view.DestinationAddress, entry.OriginalDestination))
         {
+            // Only connections whose opening SYN was redirected. If the SYN got out before the
+            // socket event was processed, the connection is already established with its real
+            // destination, and rewriting its later packets breaks something that was working.
+            if (view.IsTcpSyn)
+            {
+                entry.SynRedirected = true;
+            }
+            else if (!entry.SynRedirected)
+            {
+                if (Interlocked.Increment(ref _lateDecisions) is 1 or 50)
+                {
+                    SplitLaneLog.Warning(
+                        LogCategory,
+                        $"connection from port {view.SourcePort} was established before its routing " +
+                        "decision was recorded, so it is being left alone rather than broken");
+                }
+
+                return PacketAction.Forward;
+            }
+
             if (RedirectRewriter.TryRedirectToListener(packet, _listenerPort, UseLoopbackRedirect))
             {
-                if (UseLoopbackRedirect)
-                {
-                    // Loopback shape: both endpoints are 127.0.0.1, so the packet is placed on the
-                    // loopback interface and delivered inbound. Observed not to arrive.
-                    address.Outbound = false;
-                    address.Loopback = true;
-                    address.Network.IfIdx = LoopbackInterfaceIndex;
-                    address.Network.SubIfIdx = 0;
-                }
-                else
-                {
-                    // Local-address shape: the destination is this machine's own address, and the
-                    // packet is left OUTBOUND so the routing stack handles it the way it handles any
-                    // locally-generated packet addressed to the machine itself - by looping it back.
-                    //
-                    // Flipping it to inbound was tried first and did not arrive either. Handing the
-                    // stack a packet to route, rather than asserting where in the stack it belongs,
-                    // asks less of assumptions about WinDivert's injection points.
-                    address.Loopback = false;
-                }
+                // The direction flags are left exactly as captured, for both shapes.
+                //
+                // This is the whole lesson of this path, learned the expensive way. Asserting where
+                // a packet belongs in the stack - flipping it to inbound, declaring it loopback,
+                // naming an interface index - produces a packet WinDivert accepts and the stack
+                // discards, with no error at either end. Rewriting only the addresses and handing it
+                // back the way it arrived lets the stack route it, which is what routing is for.
+                //
+                // Which addresses to use is a separate question, and the answer is constrained: a
+                // packet whose source is one of the machine's own addresses, arriving on a physical
+                // interface, is rejected as a spoof before it ever reaches a socket. That is what
+                // the local-address shape ran into - the stack answered with a reset and the
+                // listener never saw a connection. Both endpoints on loopback satisfy that rule.
                 Interlocked.Increment(ref _redirected);
                 return PacketAction.Rewritten;
             }

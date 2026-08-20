@@ -63,7 +63,7 @@ public sealed class ProcessResolver
             return string.Empty;
         }
 
-        var startTime = TryGetStartTime(processId);
+        var (rawPath, startTime) = Query(processId);
 
         if (_cache.TryGetValue(processId, out var cached) && cached.StartTime == startTime)
         {
@@ -72,7 +72,7 @@ public sealed class ProcessResolver
 
         Misses++;
 
-        var path = ExecutablePath.Normalize(QueryImagePath(processId));
+        var path = ExecutablePath.Normalize(rawPath);
         var info = new ProcessInfo(path, startTime);
 
         if (_cache.Count >= _maxEntries)
@@ -131,28 +131,66 @@ public sealed class ProcessResolver
         }
     }
 
-    /// <summary>Reads a process's creation time as a tick count, or 0 when unavailable.</summary>
-    private static long TryGetStartTime(uint processId)
+    /// <summary>
+    /// Reads a process's image path and creation time from a single handle.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// One <c>OpenProcess</c> and two cheap queries. The previous version called
+    /// <c>Process.GetProcessById</c> for the start time, which opens the process a second time and
+    /// builds a managed wrapper around it - milliseconds, on a path that runs once per outbound
+    /// connection on the machine.
+    /// </para>
+    /// <para>
+    /// That cost was not merely wasteful, it was a correctness bug. Windows delivers the
+    /// socket-layer event before the SYN goes out, but the two are processed on different threads;
+    /// while this call was slow the packet loop overtook the socket pump, the SYN left
+    /// un-redirected, and the connection established with the real server before SplitLane had
+    /// recorded anything about it.
+    /// </para>
+    /// </remarks>
+    private static (string Path, long StartTime) Query(uint processId)
     {
+        var handle = NativeMethods.OpenProcess(
+            NativeMethods.ProcessQueryLimitedInformation, false, processId);
+
+        if (handle == nint.Zero)
+        {
+            // A protected process, or one that has already exited. Unknown identity routes DIRECT.
+            return (string.Empty, 0);
+        }
+
         try
         {
-            using var process = Process.GetProcessById((int)processId);
-            return process.StartTime.Ticks;
+            var path = string.Empty;
+            var capacity = 1024;
+            var buffer = new StringBuilder(capacity);
+
+            if (NativeMethods.QueryFullProcessImageName(handle, 0, buffer, ref capacity))
+            {
+                path = buffer.ToString(0, capacity);
+            }
+            else if (Marshal.GetLastWin32Error() == NativeMethods.ErrorInsufficientBuffer)
+            {
+                capacity = 32768;
+                buffer = new StringBuilder(capacity);
+                if (NativeMethods.QueryFullProcessImageName(handle, 0, buffer, ref capacity))
+                {
+                    path = buffer.ToString(0, capacity);
+                }
+            }
+
+            long startTime = 0;
+            if (NativeMethods.GetProcessTimes(handle, out var created, out _, out _, out _))
+            {
+                startTime = ((long)created.High << 32) | (uint)created.Low;
+            }
+
+            return (path, startTime);
         }
-        catch (ArgumentException)
+        finally
         {
-            // The process is already gone. Its connection is going nowhere, and the empty identity
-            // this produces routes DIRECT.
-            return 0;
-        }
-        catch (InvalidOperationException)
-        {
-            return 0;
-        }
-        catch (Win32Exception)
-        {
-            // A protected process. Unknown identity, DIRECT.
-            return 0;
+            NativeMethods.CloseHandle(handle);
         }
     }
 }
@@ -177,4 +215,16 @@ internal static partial class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool QueryFullProcessImageName(
         nint process, uint flags, StringBuilder exeName, ref int size);
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct FileTime
+    {
+        public uint Low;
+        public int High;
+    }
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool GetProcessTimes(
+        nint process, out FileTime creation, out FileTime exit, out FileTime kernel, out FileTime user);
 }

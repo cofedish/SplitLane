@@ -46,6 +46,7 @@ param(
     [ValidateSet('loopback', 'local')]
     [string]$Mode = 'loopback',
     [switch]$Trace,
+    [switch]$Capture,
     [switch]$KeepRunning
 )
 
@@ -210,7 +211,27 @@ if (-not $up) {
 Start-Sleep -Seconds 3
 Write-Host '  engine up'
 
+$portLine = Select-String -Path $engineLog -Pattern 'listener port (\d+)' -ErrorAction SilentlyContinue
+$listenerPort = if ($portLine) { [int]$portLine.Matches[0].Groups[1].Value } else { 0 }
+Write-Host "  redirect listener on port $listenerPort"
+
 # ---- 4. The measurement --------------------------------------------------------------------------
+#
+# Optionally under a real packet capture. Counters and log lines say what SplitLane believes it did;
+# pktmon says what the stack actually carried, which is the only thing that settles an argument about
+# whether an injected packet was delivered.
+$captureText = Join-Path $artifacts 'verify-capture.txt'
+
+if ($Capture) {
+    $etl = Join-Path $artifacts 'verify-capture.etl'
+    Remove-Item $etl, $captureText -Force -ErrorAction SilentlyContinue
+
+    Invoke-Privileged ('pktmon filter remove >nul 2>&1' +
+        ' & pktmon filter add SplitLane -t tcp -p ' + $listenerPort + ' >nul 2>&1' +
+        ' & pktmon start --capture --comp all --pkt-size 128 --file-name "' + $etl + '" >nul 2>&1')
+    Start-Sleep -Milliseconds 800
+}
+
 Write-Host ''
 Write-Host '  Running curl through the proxy lane...'
 $output = & C:\Windows\System32\curl.exe -s -o NUL --noproxy '*' `
@@ -218,7 +239,19 @@ $output = & C:\Windows\System32\curl.exe -s -o NUL --noproxy '*' `
 $curlExit = $LASTEXITCODE
 Start-Sleep -Seconds 2
 
+if ($Capture) {
+    Invoke-Privileged ('pktmon stop >nul 2>&1' +
+        ' & pktmon etl2txt "' + $etl + '" --out "' + $captureText + '" >nul 2>&1' +
+        ' & pktmon filter remove >nul 2>&1')
+    Start-Sleep -Milliseconds 500
+}
+
 $connects = @(Select-String -Path $testbedLog -Pattern 'CONNECT' -ErrorAction SilentlyContinue)
+# What the listener itself saw. This is the signal that separates the two possible failures, and it
+# was there all along: "refused" means the connection was accepted and then dropped because the NAT
+# lookup missed - a bug in SplitLane. Silence means the SYN never reached the socket at all - a
+# problem with the injection. They need opposite fixes.
+$listener = @(Select-String -Path $engineLog -Pattern 'refused unrecognised|relaying|proxy handshake failed' -ErrorAction SilentlyContinue)
 $decisions = @(Select-String -Path $engineLog -Pattern 'PROXY curl' -ErrorAction SilentlyContinue)
 $traces = @(Select-String -Path $engineLog -Pattern 'TRACE' -ErrorAction SilentlyContinue)
 $counters = @(Select-String -Path $engineLog -Pattern 'socket events' -ErrorAction SilentlyContinue)
@@ -228,15 +261,28 @@ Write-Host '================ RESULT ================' -ForegroundColor Cyan
 Write-Host "  curl            : $output (exit $curlExit)"
 Write-Host "  routing decision: $(if ($decisions) { $decisions[-1].Line.Trim() } else { 'none - the rule did not match' })"
 Write-Host "  counters        : $(if ($counters) { $counters[-1].Line.Trim() } else { 'none' })"
+Write-Host '  listener        :'
+if ($listener) {
+    $listener | Select-Object -Last 4 | ForEach-Object { Write-Host "    $($_.Line.Trim())" }
+}
+else {
+    Write-Host '    nothing - no connection was ever accepted on the redirect port'
+}
 
 if ($traces) {
     Write-Host '  packets seen on the redirect port:'
     $traces | Select-Object -Last 6 | ForEach-Object { Write-Host "    $($_.Line.Trim())" }
 }
-elseif ($Trace) {
+elseif ($Trace -and $connects.Count -eq 0) {
     Write-Host '  packets seen on the redirect port: NONE' -ForegroundColor Yellow
     Write-Host '    The injected packet never reached the stack, so the problem is the injection'
     Write-Host '    itself rather than the listening socket.'
+}
+elseif ($Trace) {
+    # WinDivert marks reinjected packets as impostors and does not re-divert them, so a sniffing
+    # handle never sees them. Once the relay is working their absence proves nothing.
+    Write-Host '  packets seen on the redirect port: none, which is expected once it works -'
+    Write-Host '    reinjected packets are not re-diverted to a sniffing handle.'
 }
 
 Write-Host ''
@@ -254,6 +300,14 @@ else {
     }
 }
 Write-Host '=======================================' -ForegroundColor Cyan
+if ($Capture -and (Test-Path $captureText)) {
+    $lines = @(Get-Content $captureText | Where-Object { $_ -match "$listenerPort" })
+    Write-Host ''
+    Write-Host "  packet capture ($($lines.Count) lines mentioning port $listenerPort):"
+    $lines | Select-Object -First 20 | ForEach-Object { Write-Host "    $_" }
+    Write-Host "  full capture: $captureText"
+}
+
 Write-Host ''
 Write-Host "  engine log: $engineLog"
 

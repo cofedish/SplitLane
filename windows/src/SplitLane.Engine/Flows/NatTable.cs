@@ -23,7 +23,26 @@ public sealed record NatEntry(
     string ExecutablePath,
     string? ApplicationName,
     string? Hostname,
-    DateTimeOffset CreatedAt);
+    DateTimeOffset CreatedAt)
+{
+    /// <summary>
+    /// Whether this connection's opening SYN was redirected.
+    /// </summary>
+    /// <remarks>
+    /// The socket-layer event and the packet loop run on different threads, so it is possible for a
+    /// SYN to be sent before the routing decision has been recorded. When that happens the
+    /// connection establishes with its real destination, and diverting its <i>later</i> packets is
+    /// strictly worse than leaving it alone: it takes a working connection and points it at a port
+    /// with no matching endpoint, which the stack answers with a reset.
+    ///
+    /// <para>
+    /// Observed in a packet capture before it was understood: the SYN left un-redirected, and the
+    /// ACK and the HTTP request that followed were rewritten and dropped with "transport endpoint
+    /// was not found".
+    /// </para>
+    /// </remarks>
+    public bool SynRedirected { get; set; }
+}
 
 /// <summary>
 /// Maps a redirected connection back to where it was actually going.

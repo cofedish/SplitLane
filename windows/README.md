@@ -142,10 +142,10 @@ there is deliberately no message that names a file to open, a command to run, or
 - **Family matching is refused for shared directories.** Ticking "include folder" on a binary in
   `C:\Windows\System32` would put the operating system in the proxy lane, so it is not allowed
   (ADR W-0003).
-- **The divert layer has never run against the driver.** Everything in this repository builds, and
-  the packet arithmetic, NAT table, DNS parser and SOCKS5 relay are covered by tests that pass. The
-  WinDivert reinjection path itself is unverified — see
-  [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md#unverified).
+- **Interception is verified, the rest of the product is young.** A selected application's traffic
+  has been confirmed reaching the proxy on a live machine, from the upstream side. What has *not*
+  been exercised is everything past a single connection: sustained load, many applications at once,
+  IPv6, sleep and resume, or a network that changes underneath it.
 
 ## Documentation
 
