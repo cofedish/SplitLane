@@ -6,7 +6,12 @@ artifacts/
 # The WinDivert driver is fetched, never committed. See tools/fetch-windivert.ps1 and ADR W-0001:
 # vendoring a third-party kernel driver is a supply-chain decision that should be made explicitly
 # rather than inherited by everyone who clones the repository.
-runtime/
+#
+# Anchored with a leading slash, and it has to stay that way. Unanchored, "runtime/" matches a
+# directory of that name at any depth - and on Windows, where git matches case-insensitively, it
+# quietly swallowed src/SplitLane.Engine/Runtime/. Four source files never reached the repository
+# and the published branch did not compile, while every local build was green.
+/runtime/
 
 # Local solution state
 *.user
