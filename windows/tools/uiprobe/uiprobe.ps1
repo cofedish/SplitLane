@@ -15,6 +15,11 @@ Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Drawing, Sy
 
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
+# Bitmap.Save resolves a relative path against the *process* working directory, which is not the
+# PowerShell location and is usually somewhere unwritable. It reports the failure as a bare
+# "generic error occurred in GDI+", so this is resolved up front rather than diagnosed later.
+$OutDir = (Resolve-Path $OutDir).ProviderPath
+
 function Get-MainWindow {
     param([int]$ProcessId, [int]$TimeoutSeconds = 25)
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
@@ -31,6 +36,24 @@ function Get-MainWindow {
 
 function Save-Shot {
     param($Window, [string]$Name)
+
+    # Capture is screen-region based, so whatever is on top gets captured — including, on a machine
+    # someone is actually using, an unrelated application that stole focus. Re-assert the foreground
+    # and verify it took before reading pixels, rather than silently saving the wrong window.
+    $hwnd = [IntPtr]$Window.Current.NativeWindowHandle
+    for ($i = 0; $i -lt 10; $i++) {
+        if ([Win32.Mover]::GetForegroundWindow() -eq $hwnd) { break }
+        [Win32.Mover]::SetForegroundWindow($hwnd) | Out-Null
+        Start-Sleep -Milliseconds 250
+    }
+
+    if ([Win32.Mover]::GetForegroundWindow() -ne $hwnd) {
+        Write-Output "SKIPPED $Name - could not bring the window to the foreground"
+        return
+    }
+
+    Start-Sleep -Milliseconds 200
+
     $rect = $Window.Current.BoundingRectangle
     if ($rect.Width -le 0) { throw "Window has no bounds" }
     $bmp = New-Object System.Drawing.Bitmap([int]$rect.Width, [int]$rect.Height)
@@ -100,6 +123,7 @@ if (-not ('Win32.Mover' -as [type])) {
     Add-Type -MemberDefinition @'
 [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr a, int x, int y, int cx, int cy, uint f);
 [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+[DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
 '@ -Name Mover -Namespace Win32 | Out-Null
 }
 
