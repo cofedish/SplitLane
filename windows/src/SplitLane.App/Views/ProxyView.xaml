@@ -12,9 +12,9 @@
                     <Grid>
                         <TextBlock Text="Upstream" Style="{StaticResource CardTitle}" />
                         <Border Style="{StaticResource Badge}" HorizontalAlignment="Right"
-                                Background="{StaticResource AccentTintBrush}">
+                                Background="{DynamicResource AccentTintBrush}">
                             <TextBlock Text="SOCKS5" Style="{StaticResource BadgeText}"
-                                       Foreground="{StaticResource AccentBrush}" />
+                                       Foreground="{DynamicResource AccentBrush}" />
                         </Border>
                     </Grid>
 
@@ -69,7 +69,7 @@
                                        Margin="0,0,10,0" VerticalAlignment="Center" />
                             <TextBlock Text="{Binding EndpointSummary}" Style="{StaticResource MonoText}"
                                        AutomationProperties.AutomationId="EndpointSummary"
-                                       Foreground="{StaticResource TextBrush}" VerticalAlignment="Center" />
+                                       Foreground="{DynamicResource TextBrush}" VerticalAlignment="Center" />
                         </StackPanel>
 
                         <Button Content="Test connection" Style="{StaticResource SecondaryButton}"
@@ -83,17 +83,17 @@
                             Visibility="{Binding HasTestResult, Converter={StaticResource BoolToVisible}}">
                         <Border.Style>
                             <Style TargetType="Border">
-                                <Setter Property="Background" Value="{StaticResource ProxyTintBrush}" />
+                                <Setter Property="Background" Value="{DynamicResource ProxyTintBrush}" />
                                 <Style.Triggers>
                                     <DataTrigger Binding="{Binding TestFailed}" Value="True">
-                                        <Setter Property="Background" Value="{StaticResource BlockedTintBrush}" />
+                                        <Setter Property="Background" Value="{DynamicResource BlockedTintBrush}" />
                                     </DataTrigger>
                                 </Style.Triggers>
                             </Style>
                         </Border.Style>
                         <TextBlock Text="{Binding TestResult}" TextWrapping="Wrap" FontSize="12.5"
                                    AutomationProperties.AutomationId="TestResult"
-                                   Foreground="{StaticResource TextBrush}" />
+                                   Foreground="{DynamicResource TextBrush}" />
                     </Border>
                 </StackPanel>
             </Border>
@@ -143,11 +143,11 @@
                         <TextBlock Text="{Binding CredentialStatus}" Style="{StaticResource BodyText}"
                                    FontSize="12" Margin="0,10,0,0" />
 
-                        <Border Background="{StaticResource WarningTintBrush}" CornerRadius="7"
+                        <Border Background="{DynamicResource WarningTintBrush}" CornerRadius="7"
                                 Padding="13,10" Margin="0,14,0,0"
                                 Visibility="{Binding PlaintextWarningVisible, Converter={StaticResource BoolToVisible}}">
                             <TextBlock TextWrapping="Wrap" FontSize="12.5"
-                                       Foreground="{StaticResource TextBrush}"
+                                       Foreground="{DynamicResource TextBrush}"
                                        Text="This proxy is not on this machine. SOCKS5 sends the username and password unencrypted, so they will cross the network in the clear." />
                         </Border>
                     </StackPanel>
@@ -163,7 +163,7 @@
                     <Grid Margin="0,16,0,0">
                         <StackPanel MaxWidth="600" HorizontalAlignment="Left">
                             <TextBlock Text="Send hostnames to the proxy" FontSize="13"
-                                       Foreground="{StaticResource TextBrush}" />
+                                       Foreground="{DynamicResource TextBrush}" />
                             <TextBlock Style="{StaticResource BodyText}" Margin="0,5,0,0"
                                        Text="When SplitLane knows the name a destination was resolved from, it sends the name rather than the address, so the proxy resolves it from its own location. Without this, a CDN gives you an edge node chosen for where you are instead of where the proxy is." />
                         </StackPanel>
@@ -173,11 +173,11 @@
                                       IsChecked="{Binding PreferHostnames}" />
                     </Grid>
 
-                    <Border Background="{StaticResource SurfaceRaisedBrush}" CornerRadius="7"
+                    <Border Background="{DynamicResource SurfaceRaisedBrush}" CornerRadius="7"
                             Padding="14,12" Margin="0,18,0,0">
                         <StackPanel>
                             <TextBlock Text="Fail closed" FontSize="13" FontWeight="SemiBold"
-                                       Foreground="{StaticResource TextBrush}" />
+                                       Foreground="{DynamicResource TextBrush}" />
                             <TextBlock Style="{StaticResource BodyText}" Margin="0,6,0,0"
                                        Text="A selected application whose proxy is unreachable gets a failed connection, not a working one that quietly went direct. There is no setting for this, because a silent fallback is a leak you cannot see — which is the failure SplitLane exists to prevent." />
                         </StackPanel>

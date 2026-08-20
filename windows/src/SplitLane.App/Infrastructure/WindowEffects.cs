@@ -51,6 +51,35 @@ public static class WindowEffects
     /// <summary>DWMWCP_ROUND.</summary>
     private const int CornerRound = 2;
 
+    /// <summary>
+    /// Switches the window's frame between light and dark without touching anything else.
+    /// </summary>
+    /// <remarks>
+    /// Needed on its own because the theme can change while the window is open - the person chose a
+    /// different one, or Windows did. Re-applying the whole effect would also re-extend the frame
+    /// and reset the backdrop, which flickers for no reason.
+    /// </remarks>
+    public static void SetCaptionTheme(Window window, bool dark)
+    {
+        ArgumentNullException.ThrowIfNull(window);
+
+        var handle = new WindowInteropHelper(window).Handle;
+        if (handle != nint.Zero)
+        {
+            SetCaption(handle, dark);
+        }
+    }
+
+    private static void SetCaption(nint handle, bool dark)
+    {
+        var enabled = dark ? 1 : 0;
+        if (DwmSetWindowAttribute(handle, UseImmersiveDarkMode, ref enabled, sizeof(int)) != 0)
+        {
+            // The attribute was renumbered between Windows 10 1809 and 20H1.
+            DwmSetWindowAttribute(handle, UseImmersiveDarkModeLegacy, ref enabled, sizeof(int));
+        }
+    }
+
     [DllImport("dwmapi.dll")]
     private static extern int DwmSetWindowAttribute(nint window, int attribute, ref int value, int size);
 
@@ -67,10 +96,10 @@ public static class WindowEffects
     }
 
     /// <summary>
-    /// Applies the dark caption, rounded corners and a composition backdrop to a window.
+    /// Applies the caption colour, rounded corners and a composition backdrop to a window.
     /// </summary>
     /// <returns>True when the backdrop was accepted, so the caller can decide how opaque to be.</returns>
-    public static bool Apply(Window window, Backdrop backdrop)
+    public static bool Apply(Window window, Backdrop backdrop, bool dark = true)
     {
         ArgumentNullException.ThrowIfNull(window);
 
@@ -80,12 +109,7 @@ public static class WindowEffects
             return false;
         }
 
-        var enabled = 1;
-        if (DwmSetWindowAttribute(handle, UseImmersiveDarkMode, ref enabled, sizeof(int)) != 0)
-        {
-            // The attribute was renumbered between Windows 10 1809 and 20H1.
-            DwmSetWindowAttribute(handle, UseImmersiveDarkModeLegacy, ref enabled, sizeof(int));
-        }
+        SetCaption(handle, dark);
 
         var corner = CornerRound;
         DwmSetWindowAttribute(handle, WindowCornerPreference, ref corner, sizeof(int));

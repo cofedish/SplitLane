@@ -17,6 +17,7 @@ a running engine over the control channel.
 | `5-activity.png` | Recent connections. DIRECT decisions are counted, not listed. |
 | `6-settings.png` | Diagnostics, storage, and the honest statement about how this differs from macOS. |
 | `7-routing.png` | The installed build, connected to the installed engine with the driver loaded. |
+| `8-light-theme.png` | The light theme, chosen in Settings and applied without a restart. |
 
 The window is captured from the screen rather than rendered offscreen, so the composition backdrop is
 included. The probe verifies it has foreground before reading pixels — an earlier version did not,

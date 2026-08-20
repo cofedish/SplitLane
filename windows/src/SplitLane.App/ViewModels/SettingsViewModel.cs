@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.IO;
 using SplitLane.App.Infrastructure;
+using SplitLane.App.Services;
+using SplitLane.App.Theme;
 using SplitLane.Core.Ipc;
 using SplitLane.Core.Models;
 
@@ -10,6 +12,7 @@ namespace SplitLane.App.ViewModels;
 public sealed class SettingsViewModel : ObservableObject
 {
     private readonly MainViewModel _main;
+    private AppTheme _theme = UiSettings.Load().Theme;
     private bool _logsDirectFlows;
     private string _redirectPort = "0";
 
@@ -29,6 +32,57 @@ public sealed class SettingsViewModel : ObservableObject
 
     /// <summary>Shows the engine log in Explorer.</summary>
     public RelayCommand OpenLogCommand { get; }
+
+    /// <summary>
+    /// Which look the application wears.
+    /// </summary>
+    /// <remarks>
+    /// Applied the moment it changes and saved at the same time. A theme that needed a restart, or a
+    /// Save button, would be a setting about the thing you are looking at that does not change the
+    /// thing you are looking at.
+    /// </remarks>
+    public AppTheme Theme
+    {
+        get => _theme;
+        set
+        {
+            if (Set(ref _theme, value))
+            {
+                ThemeService.Apply(value);
+                UiSettings.Save(new UiPreferences(value));
+                Raise(nameof(IsSystemTheme));
+                Raise(nameof(IsLightTheme));
+                Raise(nameof(IsDarkTheme));
+                Raise(nameof(ThemeSummary));
+            }
+        }
+    }
+
+    /// <summary>True when the theme follows Windows.</summary>
+    public bool IsSystemTheme
+    {
+        get => Theme == AppTheme.System;
+        set { if (value) { Theme = AppTheme.System; } }
+    }
+
+    /// <summary>True when the theme is pinned to light.</summary>
+    public bool IsLightTheme
+    {
+        get => Theme == AppTheme.Light;
+        set { if (value) { Theme = AppTheme.Light; } }
+    }
+
+    /// <summary>True when the theme is pinned to dark.</summary>
+    public bool IsDarkTheme
+    {
+        get => Theme == AppTheme.Dark;
+        set { if (value) { Theme = AppTheme.Dark; } }
+    }
+
+    /// <summary>What the current choice means in practice.</summary>
+    public string ThemeSummary => Theme == AppTheme.System
+        ? $"Following Windows, which is currently {(ThemeService.Resolved == AppTheme.Light ? "light" : "dark")}."
+        : "Fixed, whatever Windows is set to.";
 
     /// <summary>
     /// Whether the engine should log every DIRECT decision.

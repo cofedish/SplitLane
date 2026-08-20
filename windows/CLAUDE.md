@@ -57,6 +57,13 @@ and the packet path is a NAT-table lookup keyed on the source port. See `docs/NE
   the signature. A NAT bug produces a silently hanging connection, not an error, so it has to be
   reachable from a unit test.
 - The process cache keys on **(pid, start time)**. A bare pid is reused within seconds.
+- **The palette is reached with `DynamicResource`, never `StaticResource`.** WPF freezes the brushes
+  in a resource dictionary and a static reference resolves once at load, so a theme switch that
+  changes the dictionary changes nothing on screen. `ThemeService` replaces entries; the templates
+  have to be looking.
+- One inset per control. `Padding` on a TextBox is applied by the control *and* by whatever the
+  template does with it, and applying it in both places put the caret a padding-width right of the
+  placeholder it was replacing.
 - Warnings are errors, project-wide.
 
 ## Commands

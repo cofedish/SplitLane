@@ -23,7 +23,7 @@
 
                 <TextBlock Grid.Column="0" Text="{Binding Summary}"
                            AutomationProperties.AutomationId="ApplicationsSummary"
-                           FontSize="13" Foreground="{StaticResource TextMutedBrush}"
+                           FontSize="13" Foreground="{DynamicResource TextMutedBrush}"
                            VerticalAlignment="Center" Margin="0,0,20,0"
                            TextTrimming="CharacterEllipsis" />
 
@@ -45,13 +45,13 @@
             -->
             <Border Grid.Row="0" Margin="0,0,10,16" Padding="15,12" CornerRadius="10"
                     VerticalAlignment="Bottom"
-                    Background="{StaticResource WarningTintBrush}"
-                    BorderBrush="{StaticResource WarningBrush}" BorderThickness="1"
+                    Background="{DynamicResource WarningTintBrush}"
+                    BorderBrush="{DynamicResource WarningBrush}" BorderThickness="1"
                     Visibility="{Binding HasStaleRules, Converter={StaticResource BoolToVisible}}">
                 <TextBlock Text="{Binding StaleSummary}"
                            AutomationProperties.AutomationId="StaleRulesBanner"
                            FontSize="12.5" TextWrapping="Wrap"
-                           Foreground="{StaticResource TextBrush}" />
+                           Foreground="{DynamicResource TextBrush}" />
             </Border>
 
             <!-- Empty state -->
@@ -61,7 +61,7 @@
                 <StackPanel HorizontalAlignment="Center">
                     <TextBlock Text="Nothing is in the proxy lane" FontSize="17" FontWeight="SemiBold"
                                FontFamily="{StaticResource DisplayFont}"
-                               Foreground="{StaticResource TextBrush}"
+                               Foreground="{DynamicResource TextBrush}"
                                HorizontalAlignment="Center" />
                     <TextBlock Style="{StaticResource BodyText}" MaxWidth="440" TextAlignment="Center"
                                Margin="0,10,0,0" HorizontalAlignment="Center"
@@ -99,7 +99,7 @@
                                     <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="0,0,20,0">
                                         <TextBlock Text="{Binding DisplayName}"
                                                    FontSize="14.5" FontWeight="SemiBold"
-                                                   Foreground="{StaticResource TextBrush}"
+                                                   Foreground="{DynamicResource TextBrush}"
                                                    TextTrimming="CharacterEllipsis" />
 
                                         <TextBlock Text="{Binding ExecutablePath}"
@@ -120,16 +120,16 @@
                                                 <ColumnDefinition Width="*" />
                                             </Grid.ColumnDefinitions>
 
-                                            <Border Grid.Column="0" Background="{StaticResource SurfaceRaisedBrush}"
+                                            <Border Grid.Column="0" Background="{DynamicResource SurfaceRaisedBrush}"
                                                     CornerRadius="4" Padding="7,3" VerticalAlignment="Center">
                                                 <TextBlock Text="{Binding PublisherLabel}" FontSize="11"
-                                                           Foreground="{StaticResource TextMutedBrush}"
+                                                           Foreground="{DynamicResource TextMutedBrush}"
                                                            MaxWidth="240" TextTrimming="CharacterEllipsis" />
                                             </Border>
 
                                             <TextBlock Grid.Column="1" Text="{Binding MatchSummary}"
                                                        FontSize="11.5"
-                                                       Foreground="{StaticResource TextFaintBrush}"
+                                                       Foreground="{DynamicResource TextFaintBrush}"
                                                        VerticalAlignment="Center" Margin="10,0,0,0"
                                                        TextTrimming="CharacterEllipsis"
                                                        ToolTip="{Binding MatchTooltip}" />
@@ -137,17 +137,17 @@
 
                                         <!-- W-4: the path will change, or already has. -->
                                         <Border Margin="0,10,0,0" Padding="10,7" CornerRadius="7"
-                                                Background="{StaticResource WarningTintBrush}"
+                                                Background="{DynamicResource WarningTintBrush}"
                                                 Visibility="{Binding HasWarning,
                                                              Converter={StaticResource BoolToVisible}}">
                                             <StackPanel Orientation="Horizontal">
                                                 <Ellipse Width="6" Height="6" VerticalAlignment="Top"
                                                          Margin="0,6,9,0"
-                                                         Fill="{StaticResource WarningBrush}" />
+                                                         Fill="{DynamicResource WarningBrush}" />
                                                 <TextBlock Text="{Binding WarningText}"
                                                            AutomationProperties.AutomationId="RuleWarning"
                                                            FontSize="11.5" TextWrapping="Wrap"
-                                                           Foreground="{StaticResource TextMutedBrush}"
+                                                           Foreground="{DynamicResource TextMutedBrush}"
                                                            MaxWidth="520" />
                                             </StackPanel>
                                         </Border>
@@ -222,11 +222,11 @@
         <!-- ==== Picker overlay ============================================================= -->
 
         <Grid Visibility="{Binding IsPickerOpen, Converter={StaticResource BoolToVisible}}">
-            <Rectangle Fill="#CC090B0F" />
+            <Rectangle Fill="{DynamicResource WindowScrimBrush}" />
 
             <Border Width="660" Height="580" VerticalAlignment="Center" HorizontalAlignment="Center"
-                    Background="{StaticResource SurfaceBrush}"
-                    BorderBrush="{StaticResource BorderStrongBrush}" BorderThickness="1"
+                    Background="{DynamicResource SurfaceBrush}"
+                    BorderBrush="{DynamicResource BorderStrongBrush}" BorderThickness="1"
                     CornerRadius="12">
                 <Border.Effect>
                     <DropShadowEffect BlurRadius="40" ShadowDepth="8" Opacity="0.5" Color="Black" />
@@ -243,7 +243,7 @@
                     <Grid Grid.Row="0">
                         <TextBlock Text="Add an application" FontSize="17" FontWeight="SemiBold"
                                    FontFamily="{StaticResource DisplayFont}"
-                                   Foreground="{StaticResource TextBrush}" VerticalAlignment="Center" />
+                                   Foreground="{DynamicResource TextBrush}" VerticalAlignment="Center" />
                         <Button Content="Close" Style="{StaticResource QuietButton}"
                                 HorizontalAlignment="Right"
                                 AutomationProperties.AutomationId="ClosePickerButton"
@@ -269,7 +269,7 @@
                                             <Style TargetType="Border">
                                                 <Style.Triggers>
                                                     <Trigger Property="IsMouseOver" Value="True">
-                                                        <Setter Property="Background" Value="{StaticResource SurfaceHoverBrush}" />
+                                                        <Setter Property="Background" Value="{DynamicResource SurfaceHoverBrush}" />
                                                     </Trigger>
                                                 </Style.Triggers>
                                             </Style>
@@ -290,17 +290,17 @@
 
                                                     <TextBlock Grid.Column="0" Text="{Binding DisplayName}"
                                                                FontSize="13.5" FontWeight="SemiBold"
-                                                               Foreground="{StaticResource TextBrush}"
+                                                               Foreground="{DynamicResource TextBrush}"
                                                                TextTrimming="CharacterEllipsis" />
 
                                                     <Border Grid.Column="1"
-                                                            Background="{StaticResource SurfaceRaisedBrush}"
+                                                            Background="{DynamicResource SurfaceRaisedBrush}"
                                                             CornerRadius="4" Padding="6,2" Margin="9,0,0,0"
                                                             VerticalAlignment="Center"
                                                             Visibility="{Binding HasProcesses,
                                                                          Converter={StaticResource BoolToVisible}}">
                                                         <TextBlock Text="{Binding ProcessLabel}" FontSize="10.5"
-                                                                   Foreground="{StaticResource TextFaintBrush}" />
+                                                                   Foreground="{DynamicResource TextFaintBrush}" />
                                                     </Border>
                                                 </Grid>
 

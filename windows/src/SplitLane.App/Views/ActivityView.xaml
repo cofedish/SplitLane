@@ -28,7 +28,7 @@
             <StackPanel HorizontalAlignment="Center">
                 <TextBlock Text="Nothing to show yet" FontSize="17" FontWeight="SemiBold"
                            FontFamily="{StaticResource DisplayFont}"
-                           Foreground="{StaticResource TextBrush}" HorizontalAlignment="Center" />
+                           Foreground="{DynamicResource TextBrush}" HorizontalAlignment="Center" />
                 <TextBlock Text="{Binding EmptyMessage}" Style="{StaticResource BodyText}"
                            AutomationProperties.AutomationId="ActivityEmptyMessage"
                            MaxWidth="460" TextAlignment="Center" Margin="0,10,0,0"
@@ -45,7 +45,7 @@
                 </Grid.RowDefinitions>
 
                 <!-- Column headings -->
-                <Border Grid.Row="0" Background="{StaticResource SurfaceRaisedBrush}"
+                <Border Grid.Row="0" Background="{DynamicResource SurfaceRaisedBrush}"
                         CornerRadius="10,10,0,0" Padding="18,11">
                     <Grid>
                         <Grid.ColumnDefinitions>
@@ -72,7 +72,7 @@
                     <ItemsControl ItemsSource="{Binding VisibleConnections}">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate DataType="{x:Type vm:ConnectionRowViewModel}">
-                                <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1"
+                                <Border BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1"
                                         Padding="18,12" ToolTip="{Binding Tooltip}">
                                     <Grid>
                                         <Grid.ColumnDefinitions>
@@ -96,7 +96,7 @@
                                         </Border>
 
                                         <TextBlock Grid.Column="2" Text="{Binding ApplicationName}"
-                                                   FontSize="13" Foreground="{StaticResource TextBrush}"
+                                                   FontSize="13" Foreground="{DynamicResource TextBrush}"
                                                    VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
                                                    Margin="0,0,12,0" />
 
@@ -109,10 +109,10 @@
                                                    TextTrimming="CharacterEllipsis" Margin="0,0,12,0">
                                             <TextBlock.Style>
                                                 <Style TargetType="TextBlock">
-                                                    <Setter Property="Foreground" Value="{StaticResource TextMutedBrush}" />
+                                                    <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}" />
                                                     <Style.Triggers>
                                                         <DataTrigger Binding="{Binding IsFailure}" Value="True">
-                                                            <Setter Property="Foreground" Value="{StaticResource BlockedBrush}" />
+                                                            <Setter Property="Foreground" Value="{DynamicResource BlockedBrush}" />
                                                         </DataTrigger>
                                                     </Style.Triggers>
                                                 </Style>

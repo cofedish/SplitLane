@@ -52,7 +52,7 @@
         composition backdrop is unavailable — Windows 10, a remote session, transparency switched off
         in Accessibility — the interface degrades to a dark opaque window instead of an illegible one.
     -->
-    <Border Background="{StaticResource WindowScrimBrush}" ClipToBounds="True">
+    <Border Background="{DynamicResource WindowBaseBrush}" ClipToBounds="True">
         <Grid>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="252" />
@@ -91,8 +91,8 @@
 
             <!-- ==== Sidebar ================================================================ -->
 
-            <Border Grid.Column="0" Background="{StaticResource SidebarScrimBrush}"
-                    BorderBrush="#14FFFFFF" BorderThickness="0,0,1,0">
+            <Border Grid.Column="0" Background="{DynamicResource SidebarScrimBrush}"
+                    BorderBrush="{DynamicResource EdgeSoftBrush}" BorderThickness="0,0,1,0">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
@@ -103,24 +103,24 @@
                     <StackPanel Grid.Row="0" Margin="24,22,24,20">
                         <StackPanel Orientation="Horizontal">
                             <Border Width="32" Height="32" CornerRadius="9"
-                                    Background="{StaticResource AccentTintBrush}"
-                                    BorderBrush="{StaticResource GlassEdgeBrush}" BorderThickness="1">
+                                    Background="{DynamicResource AccentTintBrush}"
+                                    BorderBrush="{DynamicResource GlassEdgeBrush}" BorderThickness="1">
                                 <Grid>
                                     <Rectangle Width="3" Height="15" RadiusX="1.5" RadiusY="1.5"
-                                               Fill="{StaticResource ProxyBrush}"
+                                               Fill="{DynamicResource ProxyBrush}"
                                                HorizontalAlignment="Center" Margin="-7,0,0,0" />
                                     <Rectangle Width="3" Height="15" RadiusX="1.5" RadiusY="1.5"
-                                               Fill="{StaticResource DirectBrush}"
+                                               Fill="{DynamicResource DirectBrush}"
                                                HorizontalAlignment="Center" Margin="7,0,0,0" />
                                 </Grid>
                             </Border>
                             <TextBlock Text="SplitLane" FontSize="17.5" FontWeight="SemiBold"
                                        FontFamily="{StaticResource DisplayFont}"
-                                       Foreground="{StaticResource TextBrush}"
+                                       Foreground="{DynamicResource TextBrush}"
                                        VerticalAlignment="Center" Margin="12,0,0,0" />
                         </StackPanel>
                         <TextBlock Text="Per-application routing for Windows"
-                                   FontSize="11.5" Foreground="{StaticResource TextFaintBrush}"
+                                   FontSize="11.5" Foreground="{DynamicResource TextFaintBrush}"
                                    TextWrapping="Wrap" Margin="0,12,0,0" />
                     </StackPanel>
 
@@ -183,8 +183,8 @@
 
                     <!-- Engine state, always visible: it is what explains everything else. -->
                     <Border Grid.Row="2" Margin="16,0,16,16" Padding="15,13"
-                            Background="{StaticResource SurfaceBrush}"
-                            BorderBrush="{StaticResource GlassEdgeBrush}"
+                            Background="{DynamicResource SurfaceBrush}"
+                            BorderBrush="{DynamicResource GlassEdgeBrush}"
                             BorderThickness="1" CornerRadius="11"
                             shell:WindowChrome.IsHitTestVisibleInChrome="True">
                         <StackPanel>
@@ -192,19 +192,19 @@
                                 <Grid Width="10" Height="10" VerticalAlignment="Center">
                                     <!-- A slow pulse, so a healthy engine reads as alive at a glance. -->
                                     <Ellipse x:Name="Halo" Width="10" Height="10" Opacity="0"
-                                             Fill="{StaticResource ProxyBrush}"
+                                             Fill="{DynamicResource ProxyBrush}"
                                              Visibility="{Binding Overview.IsHealthy,
                                                           Converter={StaticResource BoolToVisible}}" />
                                     <Ellipse Width="8" Height="8">
                                         <Ellipse.Style>
                                             <Style TargetType="Ellipse">
-                                                <Setter Property="Fill" Value="{StaticResource DirectBrush}" />
+                                                <Setter Property="Fill" Value="{DynamicResource DirectBrush}" />
                                                 <Style.Triggers>
                                                     <DataTrigger Binding="{Binding Overview.IsHealthy}" Value="True">
-                                                        <Setter Property="Fill" Value="{StaticResource ProxyBrush}" />
+                                                        <Setter Property="Fill" Value="{DynamicResource ProxyBrush}" />
                                                     </DataTrigger>
                                                     <DataTrigger Binding="{Binding Overview.IsFaulted}" Value="True">
-                                                        <Setter Property="Fill" Value="{StaticResource BlockedBrush}" />
+                                                        <Setter Property="Fill" Value="{DynamicResource BlockedBrush}" />
                                                     </DataTrigger>
                                                 </Style.Triggers>
                                             </Style>
@@ -215,13 +215,13 @@
                                 <TextBlock Text="{Binding Overview.StateLabel}"
                                            AutomationProperties.AutomationId="EngineStateLabel"
                                            FontSize="12.5" FontWeight="SemiBold"
-                                           Foreground="{StaticResource TextBrush}"
+                                           Foreground="{DynamicResource TextBrush}"
                                            Margin="10,0,0,0" VerticalAlignment="Center"
                                            TextTrimming="CharacterEllipsis" />
                             </StackPanel>
 
                             <TextBlock Text="{Binding Overview.DriverLabel}"
-                                       FontSize="11" Foreground="{StaticResource TextFaintBrush}"
+                                       FontSize="11" Foreground="{DynamicResource TextFaintBrush}"
                                        Margin="20,5,0,0" TextTrimming="CharacterEllipsis"
                                        Visibility="{Binding EngineConnected, Converter={StaticResource BoolToVisible}}" />
                         </StackPanel>
@@ -292,13 +292,13 @@
                     </Border.RenderTransform>
                     <Border.Style>
                         <Style TargetType="Border">
-                            <Setter Property="Background" Value="{StaticResource AccentTintBrush}" />
-                            <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+                            <Setter Property="Background" Value="{DynamicResource AccentTintBrush}" />
+                            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
                             <Setter Property="BorderThickness" Value="1" />
                             <Style.Triggers>
                                 <DataTrigger Binding="{Binding BannerIsError}" Value="True">
-                                    <Setter Property="Background" Value="{StaticResource BlockedTintBrush}" />
-                                    <Setter Property="BorderBrush" Value="{StaticResource BlockedBrush}" />
+                                    <Setter Property="Background" Value="{DynamicResource BlockedTintBrush}" />
+                                    <Setter Property="BorderBrush" Value="{DynamicResource BlockedBrush}" />
                                 </DataTrigger>
                             </Style.Triggers>
                         </Style>
@@ -306,7 +306,7 @@
                     <TextBlock Text="{Binding Banner}"
                                AutomationProperties.AutomationId="Banner"
                                FontSize="12.5" TextWrapping="Wrap"
-                               Foreground="{StaticResource TextBrush}" />
+                               Foreground="{DynamicResource TextBrush}" />
                     <Border.Triggers>
                         <EventTrigger RoutedEvent="Loaded">
                             <BeginStoryboard>
@@ -337,8 +337,8 @@
 
                 <!-- The save bar exists only when there is something to save, so it never nags. -->
                 <Border Grid.Row="4" Padding="40,18"
-                        Background="#33000000"
-                        BorderBrush="#14FFFFFF" BorderThickness="0,1,0,0"
+                        Background="{DynamicResource FieldFillBrush}"
+                        BorderBrush="{DynamicResource EdgeSoftBrush}" BorderThickness="0,1,0,0"
                         Visibility="{Binding HasUnsavedChanges, Converter={StaticResource BoolToVisible}}">
                     <Border.RenderTransform>
                         <TranslateTransform x:Name="SaveBarSlide" Y="0" />
@@ -346,7 +346,7 @@
                     <Grid>
                         <TextBlock Text="You have unsaved changes."
                                    VerticalAlignment="Center"
-                                   FontSize="13" Foreground="{StaticResource TextMutedBrush}" />
+                                   FontSize="13" Foreground="{DynamicResource TextMutedBrush}" />
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                             <Button Content="Discard" Style="{StaticResource QuietButton}"
                                     AutomationProperties.AutomationId="DiscardButton"

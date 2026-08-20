@@ -5,6 +5,33 @@
     <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,0,10,0">
         <StackPanel Margin="0,0,0,28" MaxWidth="820" HorizontalAlignment="Left">
 
+            <!-- ==== Appearance ============================================================= -->
+
+            <Border Style="{StaticResource Card}">
+                <StackPanel>
+                    <TextBlock Text="Appearance" Style="{StaticResource CardTitle}" />
+
+                    <TextBlock Style="{StaticResource BodyText}" Margin="0,8,0,0"
+                               Text="Applied as you choose it. Following Windows means following it afterwards too, not only at startup." />
+
+                    <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
+                        <RadioButton Style="{StaticResource Segment}" Content="Follow Windows" GroupName="Theme" Margin="0,0,22,0"
+                                     AutomationProperties.AutomationId="ThemeSystem"
+                                     IsChecked="{Binding IsSystemTheme, Mode=TwoWay}" />
+                        <RadioButton Style="{StaticResource Segment}" Content="Light" GroupName="Theme" Margin="0,0,22,0"
+                                     AutomationProperties.AutomationId="ThemeLight"
+                                     IsChecked="{Binding IsLightTheme, Mode=TwoWay}" />
+                        <RadioButton Style="{StaticResource Segment}" Content="Dark" GroupName="Theme"
+                                     AutomationProperties.AutomationId="ThemeDark"
+                                     IsChecked="{Binding IsDarkTheme, Mode=TwoWay}" />
+                    </StackPanel>
+
+                    <TextBlock Style="{StaticResource BodyText}" Margin="0,12,0,0"
+                               AutomationProperties.AutomationId="ThemeSummary"
+                               Text="{Binding ThemeSummary}" />
+                </StackPanel>
+            </Border>
+
             <!-- ==== Divert layer =========================================================== -->
 
             <Border Style="{StaticResource Card}">
@@ -17,13 +44,13 @@
                                 <Ellipse.Style>
                                     <Style TargetType="Ellipse">
                                         <!-- Grey by default: nothing running is neither healthy nor broken. -->
-                                        <Setter Property="Fill" Value="{StaticResource DirectBrush}" />
+                                        <Setter Property="Fill" Value="{DynamicResource DirectBrush}" />
                                         <Style.Triggers>
                                             <DataTrigger Binding="{Binding DriverIsHealthy}" Value="True">
-                                                <Setter Property="Fill" Value="{StaticResource ProxyBrush}" />
+                                                <Setter Property="Fill" Value="{DynamicResource ProxyBrush}" />
                                             </DataTrigger>
                                             <DataTrigger Binding="{Binding DriverIsMissing}" Value="True">
-                                                <Setter Property="Fill" Value="{StaticResource WarningBrush}" />
+                                                <Setter Property="Fill" Value="{DynamicResource WarningBrush}" />
                                             </DataTrigger>
                                         </Style.Triggers>
                                     </Style>
@@ -31,16 +58,16 @@
                             </Ellipse>
                             <TextBlock Text="{Binding DriverStatus}"
                                        AutomationProperties.AutomationId="DriverStatus"
-                                       FontSize="13" Foreground="{StaticResource TextBrush}"
+                                       FontSize="13" Foreground="{DynamicResource TextBrush}"
                                        Margin="10,0,0,0" VerticalAlignment="Center" />
                         </StackPanel>
                     </Grid>
 
-                    <Border Background="{StaticResource SurfaceRaisedBrush}" CornerRadius="7"
+                    <Border Background="{DynamicResource SurfaceRaisedBrush}" CornerRadius="7"
                             Padding="14,12" Margin="0,16,0,0">
                         <StackPanel>
                             <TextBlock Text="How this differs from the macOS build" FontSize="13"
-                                       FontWeight="SemiBold" Foreground="{StaticResource TextBrush}" />
+                                       FontWeight="SemiBold" Foreground="{DynamicResource TextBrush}" />
                             <TextBlock Style="{StaticResource BodyText}" Margin="0,7,0,0"
                                        Text="macOS hands SplitLane each new connection and lets the kernel keep the ones it does not want. Windows has no equivalent, so the engine sees outbound packets and reinjects the ones it is not interested in byte for byte. Unselected applications are unmodified, but unlike on macOS they are not untouched — and saying otherwise would be dishonest." />
                         </StackPanel>
@@ -57,7 +84,7 @@
                     <Grid Margin="0,16,0,0">
                         <StackPanel MaxWidth="600" HorizontalAlignment="Left">
                             <TextBlock Text="Log every DIRECT decision" FontSize="13"
-                                       Foreground="{StaticResource TextBrush}" />
+                                       Foreground="{DynamicResource TextBrush}" />
                             <TextBlock Style="{StaticResource BodyText}" Margin="0,5,0,0"
                                        Text="Off by default, and worth leaving off. The engine sees every outbound connection on this machine, so turning this on makes the log a record of everything you do — and a very large one." />
                         </StackPanel>

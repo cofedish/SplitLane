@@ -65,11 +65,16 @@ function Save-Shot {
     Write-Output "shot $Name -> $path"
 }
 
-function Invoke-ById {
+function Find-ById {
     param($Window, [string]$AutomationId)
     $condition = New-Object Windows.Automation.PropertyCondition(
         [Windows.Automation.AutomationElement]::AutomationIdProperty, $AutomationId)
-    $element = $Window.FindFirst([Windows.Automation.TreeScope]::Descendants, $condition)
+    return $Window.FindFirst([Windows.Automation.TreeScope]::Descendants, $condition)
+}
+
+function Invoke-ById {
+    param($Window, [string]$AutomationId)
+    $element = Find-ById -Window $Window -AutomationId $AutomationId
     if (-not $element) { Write-Output "MISSING $AutomationId"; return $false }
 
     $pattern = $null
@@ -127,6 +132,23 @@ if (-not ('Win32.Mover' -as [type])) {
 '@ -Name Mover -Namespace Win32 | Out-Null
 }
 
+# A build of the same application, newer than the one asked for, is almost always a mistake rather
+# than a choice: the project builds to bin\Debug and the solution builds to bind\Debug, and a
+# probe pointed at the wrong one photographs yesterday's interface and calls it today's. It has
+# happened twice.
+$exeItem = Get-Item $Exe
+$binRoot = $exeItem.Directory
+while ($binRoot -and $binRoot.Name -ne 'bin') { $binRoot = $binRoot.Parent }
+if ($binRoot) {
+    $newer = @(Get-ChildItem $binRoot.FullName -Filter $exeItem.Name -Recurse -File |
+        Where-Object { $_.LastWriteTime -gt $exeItem.LastWriteTime.AddSeconds(2) })
+    if ($newer.Count -gt 0) {
+        $latest = $newer | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        Write-Warning ("A newer build exists: {0} ({1:HH:mm:ss}) vs the one being probed ({2:HH:mm:ss})." -f `
+            $latest.FullName, $latest.LastWriteTime, $exeItem.LastWriteTime)
+    }
+}
+
 $proc = Start-Process -FilePath $Exe -PassThru
 Start-Sleep -Milliseconds 1500
 $window = Get-MainWindow -ProcessId $proc.Id
@@ -155,6 +177,48 @@ foreach ($step in $Steps) {
         'shot'  { Save-Shot -Window $window -Name $parts[1] }
         'read'  { Write-Output ("read {0} = {1}" -f $parts[1], (Read-Text -Window $window -AutomationId $parts[1])) }
         'wait'  { Start-Sleep -Milliseconds ([int]$parts[1]) }
+        'zoom'  {
+            # Crops one element out of a shot of the window, and enlarges it.
+            #
+            # Cropping is done inside the window's own image on purpose. Capturing an element by its
+            # screen rectangle looks equivalent and is not: this script runs DPI-unaware while
+            # UI Automation reports physical pixels, so the two disagree by the display's scale
+            # factor - and an attempt to photograph a text field produced a picture of whatever
+            # application happened to be sitting at those coordinates instead.
+            $kv = $parts[1].Split('=', 2)
+            $target = Find-ById -Window $window -AutomationId $kv[0]
+            if (-not $target) { Write-Output "zoom: no $($kv[0])"; break }
+
+            $scale = if ($kv.Length -gt 1) { [int]$kv[1] } else { 3 }
+            $wr = $window.Current.BoundingRectangle
+            $er = $target.Current.BoundingRectangle
+
+            $shot = New-Object System.Drawing.Bitmap ([int]$wr.Width), ([int]$wr.Height)
+            $sg = [System.Drawing.Graphics]::FromImage($shot)
+            $sg.CopyFromScreen([int]$wr.X, [int]$wr.Y, 0, 0, $shot.Size)
+
+            $rect = New-Object System.Drawing.Rectangle `
+                ([int]($er.X - $wr.X)), ([int]($er.Y - $wr.Y)), ([int]$er.Width), ([int]$er.Height)
+
+            $big = New-Object System.Drawing.Bitmap ([int]($er.Width * $scale)), ([int]($er.Height * $scale))
+            $bg = [System.Drawing.Graphics]::FromImage($big)
+            $bg.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::NearestNeighbor
+            $bg.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::Half
+            $dest = New-Object System.Drawing.Rectangle 0, 0, $big.Width, $big.Height
+            $bg.DrawImage($shot, $dest, $rect, [System.Drawing.GraphicsUnit]::Pixel)
+
+            $path = Join-Path $OutDir ("zoom-" + $kv[0] + ".png")
+            $big.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
+            $sg.Dispose(); $bg.Dispose(); $shot.Dispose(); $big.Dispose()
+            Write-Output "zoom $($kv[0]) -> $path"
+        }
+        'focus' {
+            # Keyboard focus, not just selection. Some defects are only visible with a caret in the
+            # field - where the caret sits relative to the text it is about to insert, for one.
+            $element = Find-ById -Window $window -AutomationId $parts[1]
+            if ($element) { $element.SetFocus() } else { Write-Output "focus: no $($parts[1])" }
+            Start-Sleep -Milliseconds 400
+        }
         'set'   {
             $kv = $parts[1].Split('=', 2)
             Set-Text -Window $window -AutomationId $kv[0] -Value $kv[1]

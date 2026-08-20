@@ -45,7 +45,13 @@
         that the blur is still visible. If the backdrop fails to apply, this is simply a dark window,
         which is why nothing else in the theme assumes transparency.
     -->
-    <SolidColorBrush x:Key="WindowScrimBrush" Color="#C2080A0F" />
+    <!--
+        Two jobs that used to share one brush. The window's ground and the dim behind a modal look
+        alike on a dark theme and pull in opposite directions on a light one: the ground has to be
+        light, and the dim has to darken what is behind it.
+    -->
+    <SolidColorBrush x:Key="WindowBaseBrush" Color="#C2080A0F" />
+    <SolidColorBrush x:Key="WindowScrimBrush" Color="#CC090B0F" />
     <SolidColorBrush x:Key="SidebarScrimBrush" Color="#3A05070B" />
 
     <SolidColorBrush x:Key="BackgroundBrush" Color="{StaticResource BackgroundColor}" />
@@ -109,6 +115,24 @@
         <GradientStop Color="#54E39B" Offset="0" />
         <GradientStop Color="#2FC97B" Offset="1" />
     </LinearGradientBrush>
+
+    <!--
+        Surfaces and overlays that used to be written as literals in the control templates.
+
+        They are here because a literal cannot change with the theme. A white 10% overlay reads as
+        "slightly brighter" on a dark ground and as nothing at all on a light one, and ink chosen to
+        sit on an accent has to change when the accent does.
+    -->
+    <SolidColorBrush x:Key="FieldFillBrush" Color="#33000000" />
+    <SolidColorBrush x:Key="PopoverBrush" Color="#F21A1F29" />
+    <SolidColorBrush x:Key="OnAccentBrush" Color="#08111F" />
+    <SolidColorBrush x:Key="OverlaySoftBrush" Color="#12FFFFFF" />
+    <SolidColorBrush x:Key="OverlayBrush" Color="#1AFFFFFF" />
+    <SolidColorBrush x:Key="OverlayStrongBrush" Color="#1FFFFFFF" />
+    <SolidColorBrush x:Key="EdgeSoftBrush" Color="#38FFFFFF" />
+    <SolidColorBrush x:Key="EdgeBrush" Color="#42FFFFFF" />
+    <SolidColorBrush x:Key="EdgeStrongBrush" Color="#4DFFFFFF" />
+    <Color x:Key="OverlayAnimationColor">#1AFFFFFF</Color>
 
     <FontFamily x:Key="UiFont">Segoe UI Variable Text, Segoe UI</FontFamily>
     <FontFamily x:Key="DisplayFont">Segoe UI Variable Display, Segoe UI</FontFamily>

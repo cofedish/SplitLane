@@ -12,7 +12,7 @@
             <Style.Triggers>
                 <DataTrigger Binding="{Binding HasStatus}" Value="False">
                     <Setter Property="FontSize" Value="15" />
-                    <Setter Property="Foreground" Value="{StaticResource TextFaintBrush}" />
+                    <Setter Property="Foreground" Value="{DynamicResource TextFaintBrush}" />
                 </DataTrigger>
             </Style.Triggers>
         </Style>
@@ -35,13 +35,13 @@
                             <Border CornerRadius="6" Padding="10,4" VerticalAlignment="Center">
                                 <Border.Style>
                                     <Style TargetType="Border">
-                                        <Setter Property="Background" Value="{StaticResource DirectTintBrush}" />
+                                        <Setter Property="Background" Value="{DynamicResource DirectTintBrush}" />
                                         <Style.Triggers>
                                             <DataTrigger Binding="{Binding IsHealthy}" Value="True">
-                                                <Setter Property="Background" Value="{StaticResource ProxyTintBrush}" />
+                                                <Setter Property="Background" Value="{DynamicResource ProxyTintBrush}" />
                                             </DataTrigger>
                                             <DataTrigger Binding="{Binding IsFaulted}" Value="True">
-                                                <Setter Property="Background" Value="{StaticResource BlockedTintBrush}" />
+                                                <Setter Property="Background" Value="{DynamicResource BlockedTintBrush}" />
                                             </DataTrigger>
                                         </Style.Triggers>
                                     </Style>
@@ -49,13 +49,13 @@
                                 <TextBlock Text="{Binding StateLabel}" FontSize="13" FontWeight="SemiBold">
                                     <TextBlock.Style>
                                         <Style TargetType="TextBlock">
-                                            <Setter Property="Foreground" Value="{StaticResource DirectBrush}" />
+                                            <Setter Property="Foreground" Value="{DynamicResource DirectBrush}" />
                                             <Style.Triggers>
                                                 <DataTrigger Binding="{Binding IsHealthy}" Value="True">
-                                                    <Setter Property="Foreground" Value="{StaticResource ProxyBrush}" />
+                                                    <Setter Property="Foreground" Value="{DynamicResource ProxyBrush}" />
                                                 </DataTrigger>
                                                 <DataTrigger Binding="{Binding IsFaulted}" Value="True">
-                                                    <Setter Property="Foreground" Value="{StaticResource BlockedBrush}" />
+                                                    <Setter Property="Foreground" Value="{DynamicResource BlockedBrush}" />
                                                 </DataTrigger>
                                             </Style.Triggers>
                                         </Style>
@@ -104,7 +104,7 @@
                     <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                         <TextBlock Text="{Binding RoutingStateLabel}"
                                    FontSize="13" FontWeight="SemiBold"
-                                   Foreground="{StaticResource TextMutedBrush}"
+                                   Foreground="{DynamicResource TextMutedBrush}"
                                    VerticalAlignment="Center" Margin="0,0,12,0" />
                         <ToggleButton Style="{StaticResource Switch}"
                                       AutomationProperties.AutomationId="RoutingSwitch"
@@ -123,7 +123,7 @@
                         <TextBlock Text="{Binding ProxiedCount}" Style="{StaticResource Metric}"
                                    AutomationProperties.AutomationId="ProxiedCount" />
                         <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
-                            <Ellipse Width="6" Height="6" Fill="{StaticResource ProxyBrush}"
+                            <Ellipse Width="6" Height="6" Fill="{DynamicResource ProxyBrush}"
                                      VerticalAlignment="Center" Margin="0,0,8,0" />
                             <TextBlock Text="Proxied" Style="{StaticResource MetricLabel}" Margin="0" />
                         </StackPanel>
@@ -134,7 +134,7 @@
                     <StackPanel>
                         <TextBlock Text="{Binding DirectCount}" Style="{StaticResource Metric}" />
                         <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
-                            <Ellipse Width="6" Height="6" Fill="{StaticResource DirectBrush}"
+                            <Ellipse Width="6" Height="6" Fill="{DynamicResource DirectBrush}"
                                      VerticalAlignment="Center" Margin="0,0,8,0" />
                             <TextBlock Text="Direct" Style="{StaticResource MetricLabel}" Margin="0" />
                         </StackPanel>
@@ -146,7 +146,7 @@
                     <StackPanel>
                         <TextBlock Text="{Binding BlockedCount}" Style="{StaticResource Metric}" />
                         <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
-                            <Ellipse Width="6" Height="6" Fill="{StaticResource BlockedBrush}"
+                            <Ellipse Width="6" Height="6" Fill="{DynamicResource BlockedBrush}"
                                      VerticalAlignment="Center" Margin="0,0,8,0" />
                             <TextBlock Text="Blocked" Style="{StaticResource MetricLabel}" Margin="0" />
                         </StackPanel>
@@ -157,7 +157,7 @@
                     <StackPanel>
                         <TextBlock Text="{Binding ActiveCount}" Style="{StaticResource Metric}" />
                         <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
-                            <Ellipse Width="6" Height="6" Fill="{StaticResource AccentBrush}"
+                            <Ellipse Width="6" Height="6" Fill="{DynamicResource AccentBrush}"
                                      VerticalAlignment="Center" Margin="0,0,8,0" />
                             <TextBlock Text="Relaying now" Style="{StaticResource MetricLabel}" Margin="0" />
                         </StackPanel>
@@ -187,27 +187,27 @@
                         <StackPanel Grid.Column="0">
                             <TextBlock Text="Relayed" Style="{StaticResource FieldLabel}" />
                             <TextBlock Text="{Binding TransferredLabel}" Style="{StaticResource MonoText}"
-                                       Foreground="{StaticResource TextBrush}" />
+                                       Foreground="{DynamicResource TextBrush}" />
                         </StackPanel>
 
                         <StackPanel Grid.Column="1">
                             <TextBlock Text="Redirect listener" Style="{StaticResource FieldLabel}" />
                             <TextBlock Text="{Binding RedirectPortLabel}" Style="{StaticResource MonoText}"
-                                       Foreground="{StaticResource TextBrush}" />
+                                       Foreground="{DynamicResource TextBrush}" />
                         </StackPanel>
 
                         <StackPanel Grid.Column="2">
                             <TextBlock Text="Divert driver" Style="{StaticResource FieldLabel}" />
                             <TextBlock Text="{Binding DriverLabel}" Style="{StaticResource MonoText}"
-                                       Foreground="{StaticResource TextBrush}" />
+                                       Foreground="{DynamicResource TextBrush}" />
                         </StackPanel>
                     </Grid>
 
-                    <Border Background="{StaticResource BlockedTintBrush}" CornerRadius="7"
+                    <Border Background="{DynamicResource BlockedTintBrush}" CornerRadius="7"
                             Padding="13,10" Margin="0,16,0,0"
                             Visibility="{Binding HasLastError, Converter={StaticResource BoolToVisible}}">
                         <TextBlock Text="{Binding LastError}" TextWrapping="Wrap" FontSize="12.5"
-                                   Foreground="{StaticResource TextBrush}" />
+                                   Foreground="{DynamicResource TextBrush}" />
                     </Border>
                 </StackPanel>
             </Border>
@@ -220,19 +220,19 @@
 
                     <StackPanel Margin="0,12,0,0">
                         <StackPanel Orientation="Horizontal" Margin="0,0,0,9">
-                            <Ellipse Width="5" Height="5" Fill="{StaticResource ProxyBrush}"
+                            <Ellipse Width="5" Height="5" Fill="{DynamicResource ProxyBrush}"
                                      VerticalAlignment="Top" Margin="0,7,10,0" />
                             <TextBlock Style="{StaticResource BodyText}" MaxWidth="700" HorizontalAlignment="Left"
                                        Text="A selected application never silently falls back to DIRECT. If the proxy is unreachable the connection fails and Activity says why." />
                         </StackPanel>
                         <StackPanel Orientation="Horizontal" Margin="0,0,0,9">
-                            <Ellipse Width="5" Height="5" Fill="{StaticResource ProxyBrush}"
+                            <Ellipse Width="5" Height="5" Fill="{DynamicResource ProxyBrush}"
                                      VerticalAlignment="Top" Margin="0,7,10,0" />
                             <TextBlock Style="{StaticResource BodyText}" MaxWidth="700" HorizontalAlignment="Left"
                                        Text="A selected application's UDP is refused rather than let out. QUIC fails closed so the application falls back to TCP, which is proxied." />
                         </StackPanel>
                         <StackPanel Orientation="Horizontal">
-                            <Ellipse Width="5" Height="5" Fill="{StaticResource WarningBrush}"
+                            <Ellipse Width="5" Height="5" Fill="{DynamicResource WarningBrush}"
                                      VerticalAlignment="Top" Margin="0,7,10,0" />
                             <TextBlock Style="{StaticResource BodyText}" MaxWidth="700" HorizontalAlignment="Left"
                                        Text="DNS is not proxied. Names are resolved by Windows before SplitLane sees the connection, so an observer still learns which hosts a proxied application contacts." />

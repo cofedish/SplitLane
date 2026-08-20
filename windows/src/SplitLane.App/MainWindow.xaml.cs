@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using SplitLane.App.Infrastructure;
+using SplitLane.App.Theme;
 using SplitLane.App.ViewModels;
 
 namespace SplitLane.App;
@@ -50,7 +51,11 @@ public partial class MainWindow : Window
         // a dark desktop is indistinguishable from a plain dark window — the effect is technically
         // present and visually absent. Acrylic blurs whatever is actually behind the window, so the
         // glass reads as glass on any desktop.
-        WindowEffects.Apply(this, Backdrop.Acrylic);
+        WindowEffects.Apply(this, Backdrop.Acrylic, ThemeService.Resolved == AppTheme.Dark);
+
+        // The frame is drawn by Windows, not by us, so it has to be told separately when the theme
+        // changes - otherwise a light window keeps a dark title bar.
+        ThemeService.Changed += theme => WindowEffects.SetCaptionTheme(this, theme == AppTheme.Dark);
     }
 
     /// <summary>
