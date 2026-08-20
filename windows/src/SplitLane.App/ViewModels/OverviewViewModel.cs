@@ -1,6 +1,7 @@
 using SplitLane.App.Infrastructure;
 using SplitLane.Core.Ipc;
 using SplitLane.Core.Models;
+using SplitLane.App.Services;
 
 namespace SplitLane.App.ViewModels;
 
@@ -130,9 +131,9 @@ public sealed class OverviewViewModel : ObservableObject
             if (!_main.EngineConnected)
             {
                 // Always end on the step the user can take. Echoing only the transport error tells
-                // them what failed and not what to do about it.
-                const string remedy =
-                    "Start SplitLane.Engine.exe from an elevated prompt to begin routing.";
+                // them what failed and not what to do about it - and the step differs by machine,
+                // so it is read from how the engine is actually installed rather than assumed.
+                var remedy = EngineServicePresence.Remedy(EngineServicePresence.Read());
 
                 return _main.EngineMessage is { } message &&
                        !message.StartsWith("The SplitLane engine is not running", StringComparison.Ordinal)

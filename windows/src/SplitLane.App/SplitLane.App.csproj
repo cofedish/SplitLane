@@ -31,4 +31,10 @@
     already carries it. The engine, which is not a desktop app, does need the package.
   -->
 
+
+  <ItemGroup>
+    <!-- Reading the engine service's state, so "not running" can say what to do about it. -->
+    <PackageReference Include="System.ServiceProcess.ServiceController" Version="10.0.11" />
+  </ItemGroup>
+
 </Project>

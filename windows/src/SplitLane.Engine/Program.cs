@@ -1,7 +1,7 @@
 using System.Security.Principal;
+using System.ServiceProcess;
 using SplitLane.Core.Logging;
 using SplitLane.Engine.Divert;
-using SplitLane.Engine.Ipc;
 using SplitLane.Engine.Runtime;
 
 namespace SplitLane.Engine;
@@ -14,6 +14,7 @@ internal static class Program
     private static async Task<int> Main(string[] args)
     {
         var options = ParseOptions(args);
+        var asService = args.Contains("--service", StringComparer.OrdinalIgnoreCase);
 
         SplitLanePaths.EnsureCreated();
         SplitLaneLog.MinimumLevel = options.Verbose ? LogLevel.Debug : LogLevel.Info;
@@ -25,7 +26,10 @@ internal static class Program
         // That was observed: the engine printed one line, never opened its control channel, and sat
         // there looking alive. A routing engine meant to run unattended must not be stoppable by a
         // mouse click in a window nobody is looking at.
-        if (!args.Contains("--no-console-log", StringComparer.OrdinalIgnoreCase))
+        //
+        // A service has no console at all, so the sink is not merely unwanted there - writing to a
+        // handle that does not exist is a way to fail at the one moment nobody is watching.
+        if (!asService && !args.Contains("--no-console-log", StringComparer.OrdinalIgnoreCase))
         {
             SplitLaneLog.AddSink(new ConsoleLogSink());
         }
@@ -45,24 +49,18 @@ internal static class Program
             return 2;
         }
 
-        var store = new ConfigurationStore();
-        await using var runtime = new EngineRuntime(store, options);
-        runtime.LoadConfiguration();
-
-        await using var control = new ControlServer(runtime, store);
-        control.Start();
-
-        try
+        if (asService)
         {
-            await runtime.StartAsync().ConfigureAwait(false);
+            // Blocks until the service control manager stops the service. It refuses to run outside
+            // the SCM, which is correct: --service from a prompt is a mistake, and failing there is
+            // better than half-running with no way to be stopped.
+            ServiceBase.Run(new EngineWindowsService(options));
+            return 0;
         }
-        catch (DivertException ex)
-        {
-            // Not fatal. The control channel stays up so the app can show what went wrong and let
-            // the user fix it, which is far better than an engine that exits and leaves the UI
-            // saying "not running" with no reason.
-            SplitLaneLog.Error(LogCategory, $"{ex.Message} {ex.Remedy}");
-        }
+
+        await using var host = new EngineHost();
+        host.Start(options);
+        await host.StartRoutingAsync().ConfigureAwait(false);
 
         SplitLaneLog.Info(LogCategory, "engine ready — press Ctrl+C to stop");
 

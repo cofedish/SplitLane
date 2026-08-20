@@ -243,8 +243,8 @@ docs/screenshots/            captures of the running application
 
 ## What is not done
 
-- The engine runs as a console process. A Windows service host, so routing survives a logout, is not
-  written.
+- The service has been verified on install, restart and uninstall, but not across a machine reboot
+  or a user logout - the two things it exists to survive.
 - Nothing is code-signed, so SmartScreen warns and the driver has to be trusted on the strength of
   its own signature rather than ours.
 - Interception has been verified on IPv4 only. IPv6, sleep and resume, and adapter changes mid-flow

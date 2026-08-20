@@ -11,8 +11,9 @@
          an unlicensed project is not a decision an installer should make quietly. The fetch script
          is installed alongside instead, and the engine's preflight mode points at it. See ADR W-0001.
 
-      2. It does not register the engine as a service. There is no service host yet, and installing
-         one that does not exist would be worse than not installing one at all.
+      2. It does not install a shortcut for the engine. It used to, and that shortcut was the whole
+         problem: starting SplitLane meant right-clicking one executable to run it as administrator
+         and then opening a second one. The engine is a service now, so there is one thing to open.
 
       3. It carries no licence dialog, because the project has not chosen a licence. Every stock WiX
          UI set includes one, so this ships with the basic MSI progress UI rather than presenting
@@ -74,8 +75,45 @@
       <Files Include="$(AppPublishDir)\**" />
     </ComponentGroup>
 
+    <!--
+      The engine executable is declared on its own so a service can be hung off it; everything else
+      it needs is globbed as before. A <Files> element generates its own components, and there is
+      nowhere in one of those to say "and this is a service".
+    -->
     <ComponentGroup Id="EngineFiles" Directory="EngineFolder">
-      <Files Include="$(EnginePublishDir)\**" />
+      <Files Include="$(EnginePublishDir)\**">
+        <Exclude Files="$(EnginePublishDir)\SplitLane.Engine.exe" />
+      </Files>
+
+      <Component Id="EngineService" Guid="B4E7C1A9-3D52-4F86-A0B3-7C9E5D1F2A48">
+        <File Id="EngineExecutable" Source="$(EnginePublishDir)\SplitLane.Engine.exe" KeyPath="yes" />
+
+        <!--
+          LocalSystem, and that is what lets the application stay unelevated. The control channel was
+          built for this arrangement from the start: its ACL grants LocalSystem full control and the
+          interactive user read and write, so neither side gains anything from the other.
+
+          Started automatically, so routing survives a reboot and a logout - which the old arrangement,
+          an engine launched by hand into a user's session, could not.
+        -->
+        <ServiceInstall Id="EngineServiceInstall"
+                        Name="SplitLane"
+                        DisplayName="SplitLane routing engine"
+                        Description="Routes traffic from selected applications through the configured proxy. Applications that are not selected are left alone."
+                        Type="ownProcess"
+                        Start="auto"
+                        ErrorControl="normal"
+                        Account="LocalSystem"
+                        Arguments="--service --no-console-log"
+                        Vital="yes" />
+
+        <ServiceControl Id="EngineServiceControl"
+                        Name="SplitLane"
+                        Start="install"
+                        Stop="both"
+                        Remove="uninstall"
+                        Wait="yes" />
+      </Component>
     </ComponentGroup>
 
     <ComponentGroup Id="ToolFiles" Directory="ToolsFolder">
@@ -91,18 +129,6 @@
                   Description="Per-application network routing"
                   Target="[INSTALLFOLDER]SplitLane.exe"
                   WorkingDirectory="INSTALLFOLDER" />
-
-        <!--
-          A separate entry for the engine, which needs elevation. Windows raises the UAC prompt when
-          the target's manifest asks for it; the engine's asks for asInvoker so that its preflight
-          mode stays runnable, so this shortcut is what a user reaches for and the engine's own
-          refusal message is what tells them to right-click and run as administrator.
-        -->
-        <Shortcut Id="EngineStartMenu"
-                  Name="SplitLane Engine"
-                  Description="The routing engine. Run as administrator to divert traffic."
-                  Target="[EngineFolder]SplitLane.Engine.exe"
-                  WorkingDirectory="EngineFolder" />
 
         <RemoveFolder Id="RemoveShortcutFolder" Directory="ShortcutFolder" On="uninstall" />
         <RegistryValue Root="HKCU" Key="Software\SplitLane" Name="installed"

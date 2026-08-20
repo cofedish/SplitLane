@@ -77,6 +77,21 @@ dotnet publish $engineProject -c $Configuration -r win-x64 --self-contained true
     "-p:Version=$Version" @publishFlags -o $engineOut
 if ($LASTEXITCODE -ne 0) { throw 'Publishing SplitLane.Engine failed.' }
 
+# The driver never goes in the package, and this is where that gets enforced rather than assumed.
+#
+# The engine project copies runtime/windivert next to its output when the folder is there, which is
+# what makes F5 work on a development machine. A publish carries that along, so a package built by
+# hand on a machine that had fetched the driver quietly redistributed somebody else's signed kernel
+# driver - while CI, which has no such folder, produced a package without it. Two builds of the same
+# tag that differ in what they redistribute is not a difference to discover later.
+#
+# See ADR W-0001. The fetch script ships instead, and the engine's preflight points at it.
+$bundledDriver = @(Get-ChildItem $engineOut -Filter 'WinDivert*' -File -ErrorAction SilentlyContinue)
+if ($bundledDriver.Count -gt 0) {
+    Write-Host ("  removing {0} driver file(s) from the publish - not ours to redistribute" -f $bundledDriver.Count) -ForegroundColor Yellow
+    $bundledDriver | Remove-Item -Force
+}
+
 Write-Host ''
 Write-Host 'Building the MSI...'
 # Output is not swallowed. A packaging failure is reported by the toolchain in one line that names

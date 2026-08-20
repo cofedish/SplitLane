@@ -10,9 +10,13 @@ entirely different mechanism.
 
 ```
 SplitLane.Core        net10.0            pure — no WPF, no WinDivert, no P/Invoke
-SplitLane.Engine      net10.0-windows    elevated — the only component that sees packets
+SplitLane.Engine      net10.0-windows    a LocalSystem service — the only component that sees packets
 SplitLane.App         net10.0-windows    WPF — never elevated
 ```
+
+The engine is installed as a Windows service and starts with the machine, so opening SplitLane is
+one action. It used to be two: run the engine as administrator, then open the application. The
+privilege split is right and stays; what was wrong was making the person perform it.
 
 Dependencies run one way: `App → Core`, `Engine → Core`. The core targets plain `net10.0`, so a
 Windows-only API would not compile there at all — that is what keeps routing testable with
@@ -35,8 +39,14 @@ and the packet path is a NAT-table lookup keyed on the source port. See `docs/NE
 - Family matching cuts on the **path separator**, and is **refused for shared directories** — a
   family rule on `C:\Windows\System32` would proxy the operating system (ADR W-0003). The check
   appears in three places on purpose; do not remove any of them.
-- The **engine is the only elevated component**. Everything the app can ask it to do is
-  `EngineRequestKind`, nine members, none of which names a file, a command or a library.
+- The **engine is the only elevated component**, and runs as `LocalSystem`. Everything the app can
+  ask it to do is `EngineRequestKind`, nine members, none of which names a file, a command or a
+  library. The control channel's ACL was built for this: LocalSystem full control, interactive user
+  read and write, so neither side gains anything from the other.
+- The **driver is never in the package**. The engine project copies it next to its output when it is
+  present, which is what makes a development build work; `build-installer.ps1` deletes it from the
+  publish before packaging. Without that, a package built by hand redistributed a third-party kernel
+  driver while CI's did not — two builds of one tag differing in what they ship (ADR W-0001).
 - Packet rewriting and checksums stay in **pure functions over a buffer** with no WinDivert types in
   the signature. A NAT bug produces a silently hanging connection, not an error, so it has to be
   reachable from a unit test.
@@ -127,7 +137,13 @@ Released as `v0.1.0`: MSI, portable archive and `SHA256SUMS.txt`, built by the p
 tag. The release path is no longer theoretical - the download's hash was checked against the
 published one.
 
-Not written: a Windows service host, and code signing.
+**The engine is a Windows service.** Installed by the MSI as `SplitLane`, LocalSystem, automatic
+start. Verified on a live machine: the service starts on install, the unelevated application talks to
+it across the privilege boundary, and routing works through it - a selected application reached
+TEST-NET, which routes nowhere, so the only way there was the proxy, while the unselected control
+timed out. Uninstall stops and removes it.
+
+Not written: code signing.
 
 The live run also found three bugs of one family — failures that reported nothing. A failed
 `WinDivertRecv` was slept through, a failed `WinDivertSend` was discarded, and console logging could

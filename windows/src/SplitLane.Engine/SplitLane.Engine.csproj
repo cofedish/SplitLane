@@ -46,6 +46,12 @@
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.11" />
+    <!--
+      ServiceBase. Microsoft's own package rather than a hand-written service control dispatcher:
+      the protocol has timeouts and status transitions that are unpleasant to get wrong, and getting
+      them wrong shows up as a service stuck in "Starting" with nothing in any log.
+    -->
+    <PackageReference Include="System.ServiceProcess.ServiceController" Version="10.0.11" />
   </ItemGroup>
 
 </Project>
