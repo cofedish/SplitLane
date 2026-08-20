@@ -108,6 +108,25 @@
         <RegistryValue Root="HKCU" Key="Software\SplitLane" Name="installed"
                        Type="integer" Value="1" KeyPath="yes" />
       </Component>
+
+      <!--
+        The divert driver is fetched after installation, never shipped in the package (ADR W-0001),
+        so Windows does not know the installer is responsible for it and an uninstall leaves it
+        behind. Leaving a stray file would be untidy; leaving a kernel-mode driver on disk after
+        someone has removed the program is a different thing, and it was still sitting in the Engine
+        folder after a real uninstall was verified by hand.
+
+        Named explicitly rather than by wildcard: this removes what fetch-windivert.ps1 puts there
+        and nothing else.
+      -->
+      <Component Id="RemoveFetchedDriver" Directory="EngineFolder" Guid="*">
+        <RemoveFile Id="RemoveWinDivertDll" Name="WinDivert.dll" On="uninstall" />
+        <RemoveFile Id="RemoveWinDivertSys64" Name="WinDivert64.sys" On="uninstall" />
+        <RemoveFile Id="RemoveWinDivertSys32" Name="WinDivert32.sys" On="uninstall" />
+        <RemoveFolder Id="RemoveEngineFolder" Directory="EngineFolder" On="uninstall" />
+        <RegistryValue Root="HKCU" Key="Software\SplitLane" Name="driverCleanup"
+                       Type="integer" Value="1" KeyPath="yes" />
+      </Component>
     </ComponentGroup>
   </Fragment>
 </Wix>
