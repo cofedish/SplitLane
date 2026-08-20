@@ -78,7 +78,26 @@ public sealed class DivertPipeline : IAsyncDisposable
     private long _packetsSeen;
     private long _redirected;
     private long _sendFailures;
+    private long _traced;
     private Timer? _heartbeat;
+    private DivertHandle? _traceHandle;
+    private Thread? _traceThread;
+
+    /// <summary>
+    /// Whether a redirected connection is moved to loopback, or to the machine's own address.
+    /// </summary>
+    /// <remarks>
+    /// Loopback is the original design and does not currently deliver: the packet is rewritten, the
+    /// driver accepts the injection, and nothing ever reaches the listener. This switch exists so
+    /// both shapes can be tried in one elevated session rather than one rebuild at a time.
+    /// </remarks>
+    public bool UseLoopbackRedirect { get; init; } = true;
+
+    /// <summary>Whether to sniff the redirect port and report what the stack actually sees.</summary>
+    /// <remarks>
+    /// Everything known about the failure so far is inferred from counters. This makes it observed.
+    /// </remarks>
+    public bool TraceRedirects { get; init; }
 
     /// <summary>Builds a pipeline over the shared engine state.</summary>
     public DivertPipeline(
@@ -166,6 +185,23 @@ public sealed class DivertPipeline : IAsyncDisposable
         _networkHandle.SetParam(WinDivertParam.QueueLength, 8192);
         _networkHandle.SetParam(WinDivertParam.QueueTime, 2000);
 
+        if (TraceRedirects)
+        {
+            // A sniffing handle on the redirect port. Sniff, so it can only observe: a trace that
+            // can affect delivery is a trace that changes the thing it is measuring.
+            try
+            {
+                _traceHandle = DivertHandle.Open(
+                    $"tcp and (tcp.DstPort = {listenerPort} or tcp.SrcPort = {listenerPort})",
+                    WinDivertLayer.Network, priority: 2,
+                    WinDivertFlags.Sniff | WinDivertFlags.RecvOnly);
+            }
+            catch (DivertException ex)
+            {
+                SplitLaneLog.Warning(LogCategory, $"redirect trace unavailable: {ex.Message}");
+            }
+        }
+
         // The DNS observer is opened last and is optional: losing hostname recovery degrades SOCKS5
         // requests to IP literals, which still work. It must never prevent routing from starting.
         try
@@ -187,6 +223,11 @@ public sealed class DivertPipeline : IAsyncDisposable
         if (_dnsHandle is not null)
         {
             _dnsThread = StartThread("SplitLane.DnsObserver", () => DnsLoop(_dnsHandle));
+        }
+
+        if (_traceHandle is not null)
+        {
+            _traceThread = StartThread("SplitLane.RedirectTrace", () => TraceLoop(_traceHandle));
         }
 
         // A heartbeat, because "nothing is happening" and "everything is broken" are otherwise
@@ -467,18 +508,19 @@ public sealed class DivertPipeline : IAsyncDisposable
             entry.OriginalDestinationPort == view.DestinationPort &&
             AddressMatches(view.DestinationAddress, entry.OriginalDestination))
         {
-            if (RedirectRewriter.TryRedirectToListener(packet, _listenerPort))
+            if (RedirectRewriter.TryRedirectToListener(packet, _listenerPort, UseLoopbackRedirect))
             {
-                // The packet is now loopback-to-loopback and its destination is a socket on this
-                // machine, so it is injected INBOUND on the loopback interface rather than sent
-                // outbound. Injected outbound, WinDivert accepts it and the stack silently discards
-                // it: the send succeeds, no error is raised anywhere, and the application's SYN
-                // simply retransmits until it gives up. That was observed directly - ten packets
-                // redirected, zero send failures, nothing ever arriving at the listener.
-                address.Loopback = true;
+                // The destination is now a socket on this machine, so the packet is injected
+                // INBOUND rather than sent outbound: outbound injection means "hand this to the
+                // routing stack to send", and there is nothing left to send it to.
                 address.Outbound = false;
-                address.Network.IfIdx = LoopbackInterfaceIndex;
-                address.Network.SubIfIdx = 0;
+
+                if (UseLoopbackRedirect)
+                {
+                    address.Loopback = true;
+                    address.Network.IfIdx = LoopbackInterfaceIndex;
+                    address.Network.SubIfIdx = 0;
+                }
                 Interlocked.Increment(ref _redirected);
                 return PacketAction.Rewritten;
             }
@@ -530,6 +572,57 @@ public sealed class DivertPipeline : IAsyncDisposable
         return expected.TryWriteBytes(buffer, out var written) &&
                written == packetAddress.Length &&
                buffer[..written].SequenceEqual(packetAddress);
+    }
+
+    /// <summary>
+    /// Reports every packet the stack actually carries on the redirect port.
+    /// </summary>
+    /// <remarks>
+    /// If a redirected SYN appears here, the injection worked and the problem is the listening
+    /// socket. If it never appears, the injection is being discarded and the problem is the packet
+    /// or the injection path. Those are opposite investigations, and counters cannot tell them apart.
+    /// </remarks>
+    private void TraceLoop(DivertHandle handle)
+    {
+        var buffer = GC.AllocateArray<byte>(PacketBufferSize, pinned: true);
+
+        try
+        {
+            while (_running)
+            {
+                if (!handle.Receive(buffer, out var length, out var address, out _))
+                {
+                    if (!_running)
+                    {
+                        return;
+                    }
+
+                    Thread.Sleep(5);
+                    continue;
+                }
+
+                if (!PacketView.TryParse(buffer.AsSpan(0, length), out var view) || !view.HasPorts)
+                {
+                    continue;
+                }
+
+                // Only the first few, and only handshake packets. A trace that floods the log during
+                // a bulk transfer is a trace nobody can read.
+                if (Interlocked.Increment(ref _traced) <= 40 && (view.IsTcpSyn || view.IsTcpReset))
+                {
+                    SplitLaneLog.Debug(
+                        LogCategory,
+                        $"TRACE {(view.IsTcpSyn ? "SYN" : "RST")} " +
+                        $"{new IPAddress(view.SourceAddress)}:{view.SourcePort} -> " +
+                        $"{new IPAddress(view.DestinationAddress)}:{view.DestinationPort} " +
+                        $"outbound={address.Outbound} loopback={address.Loopback} ifIdx={address.Network.IfIdx}");
+                }
+            }
+        }
+        catch (Exception ex) when (_running)
+        {
+            SplitLaneLog.Error(LogCategory, "redirect trace stopped", ex);
+        }
     }
 
     // ---- DNS observer -----------------------------------------------------------------------
@@ -595,22 +688,27 @@ public sealed class DivertPipeline : IAsyncDisposable
         _socketHandle?.Shutdown();
         _networkHandle?.Shutdown();
         _dnsHandle?.Shutdown();
+        _traceHandle?.Shutdown();
 
         await Task.WhenAll(
             JoinAsync(_socketThread),
             JoinAsync(_networkThread),
-            JoinAsync(_dnsThread)).ConfigureAwait(false);
+            JoinAsync(_dnsThread),
+            JoinAsync(_traceThread)).ConfigureAwait(false);
 
         _socketHandle?.Dispose();
         _networkHandle?.Dispose();
         _dnsHandle?.Dispose();
+        _traceHandle?.Dispose();
 
         _socketHandle = null;
         _networkHandle = null;
         _dnsHandle = null;
+        _traceHandle = null;
         _socketThread = null;
         _networkThread = null;
         _dnsThread = null;
+        _traceThread = null;
 
         _udpPortOwners.Clear();
         _nat.Clear();

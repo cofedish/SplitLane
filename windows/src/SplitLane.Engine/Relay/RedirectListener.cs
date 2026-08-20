@@ -56,6 +56,24 @@ public sealed class RedirectListener : IAsyncDisposable
     /// <summary>The port the listener actually bound.</summary>
     public ushort Port { get; private set; }
 
+    /// <summary>
+    /// Whether to accept on every local address rather than loopback alone.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Needed only by the non-loopback redirect shape, where a redirected packet is addressed to the
+    /// machine's own interface address. A listener bound to loopback would never see it.
+    /// </para>
+    /// <para>
+    /// This does weaken W-5: the port becomes reachable from the local network rather than from this
+    /// machine only. What still protects it is the check that matters — a connection whose source
+    /// port has no NAT entry is closed immediately, and entries are only created for connections
+    /// SplitLane itself decided to proxy. An uninvited caller, local or remote, gets nothing. The
+    /// exposure is a port that accepts and instantly closes, not an open proxy.
+    /// </para>
+    /// </remarks>
+    public bool AcceptOnAllAddresses { get; init; }
+
     /// <summary>Whether the accept loops are running.</summary>
     public bool IsRunning => _acceptLoops.Count > 0 && _acceptLoops.Exists(task => !task.IsCompleted);
 
@@ -108,22 +126,27 @@ public sealed class RedirectListener : IAsyncDisposable
             _acceptLoops.Add(Task.Run(() => AcceptLoopAsync(socket, _stopping.Token)));
         }
 
-        SplitLaneLog.Info(LogCategory, $"redirect listener bound to loopback port {Port}");
+        SplitLaneLog.Info(
+            LogCategory,
+            $"redirect listener bound to {(AcceptOnAllAddresses ? "all local addresses" : "loopback")} port {Port}");
         return Port;
     }
 
     private void BindPair(ushort requestedPort)
     {
+        var v6Address = AcceptOnAllAddresses ? IPAddress.IPv6Any : IPAddress.IPv6Loopback;
+        var v4Address = AcceptOnAllAddresses ? IPAddress.Any : IPAddress.Loopback;
+
         var v6 = new Socket(AddressFamily.InterNetworkV6, SocketType.Stream, ProtocolType.Tcp);
         v6.SetSocketOption(SocketOptionLevel.IPv6, SocketOptionName.IPv6Only, true);
-        v6.Bind(new IPEndPoint(IPAddress.IPv6Loopback, requestedPort));
+        v6.Bind(new IPEndPoint(v6Address, requestedPort));
         v6.Listen(512);
         _listeners.Add(v6);
 
         Port = (ushort)((IPEndPoint)v6.LocalEndPoint!).Port;
 
         var v4 = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-        v4.Bind(new IPEndPoint(IPAddress.Loopback, Port));
+        v4.Bind(new IPEndPoint(v4Address, Port));
         v4.Listen(512);
         _listeners.Add(v4);
     }

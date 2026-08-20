@@ -205,15 +205,23 @@ Neither delivered. Since `WinDivertSend` reports success in both cases, the pack
 by the stack after injection, which points at the rewritten packet itself or at the injection path
 rather than at the API call.
 
-Next things to try, in order of likelihood:
+Both next steps are now built and are waiting on an elevated run:
 
-1. Capture the injected packet with a second sniffing handle to see what the stack actually receives.
-   Everything above is inferred from counters; this would make it observable.
-2. Leave the source address alone and redirect only the destination, to the machine's own LAN address
-   rather than loopback, with the listener bound there. That avoids the martian-address problem
-   entirely at the cost of a listener that is not loopback-only (see W-5).
-3. Check whether Windows' loopback fast path accepts injected packets at all, which would make the
-   whole loopback-NAT shape the wrong approach on modern builds and send ADR W-0001 back for review.
+1. **A trace sniffer** on the redirect port (`--trace`), which reports what the stack actually
+   carries. Everything known so far is inferred from counters, and the two possible failures need
+   opposite investigations: a redirected SYN that appears on the port means the injection worked and
+   the listening socket is at fault; one that never appears means the injection is discarded.
+2. **A second redirect shape** (`--redirect-local`), which leaves the source address alone and sends
+   the packet to the machine's own address instead of loopback. If Windows' loopback fast path is
+   what rejects injected packets — the leading hypothesis — this avoids it entirely. The cost is that
+   the listener has to accept on all local addresses rather than loopback only, which weakens W-5 to
+   "a port that accepts and instantly closes" rather than "a port unreachable from the network".
+
+Run both with `tools/verify-divert.ps1 -Mode loopback -Trace` and `-Mode local -Trace`. The script
+does the whole setup and reports a verdict from the upstream side.
+
+If neither delivers, the conclusion is that packet-level redirection to a local socket is not viable
+on current Windows without a kernel callout driver of our own, and ADR W-0001 goes back for review.
 
 **So the honest status is unchanged in substance and much narrower in scope**: the divert layer is
 implemented, compiled, unit-tested, and now driver-exercised end to end up to the final loopback hop,

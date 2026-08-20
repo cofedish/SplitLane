@@ -82,7 +82,13 @@ internal static class Program
 
     private static EngineOptions ParseOptions(string[] args) => new(
         EnableDivert: !args.Contains("--no-divert", StringComparer.OrdinalIgnoreCase),
-        Verbose: args.Contains("--verbose", StringComparer.OrdinalIgnoreCase));
+        Verbose: args.Contains("--verbose", StringComparer.OrdinalIgnoreCase),
+
+        // Loopback stays the default because it is the shape the design and the documentation
+        // describe. It does not currently deliver; --redirect-local selects the alternative while
+        // that is being worked out, rather than making an unproven change the default.
+        UseLoopbackRedirect: !args.Contains("--redirect-local", StringComparer.OrdinalIgnoreCase),
+        TraceRedirects: args.Contains("--trace", StringComparer.OrdinalIgnoreCase));
 
     /// <summary>
     /// Reports whether this machine can actually run the divert layer, without starting it.

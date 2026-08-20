@@ -75,9 +75,12 @@ routing decision, loop defence, the DNS observer, the NAT table and packet rewri
 confirmed on live traffic. WinDivert accepts every injection.
 
 **The rewritten loopback packet never reaches the redirect listener.** The connection fails, which is
-at least the right direction to fail in, but a selected application cannot yet be proxied. Both
-injection shapes were tried. See `docs/THREAT_MODEL.md § What a live run established` for the
-evidence and the next three things to try.
+at least the right direction to fail in, but a selected application cannot yet be proxied.
+
+Both next steps are built and waiting on an elevated run: a trace sniffer on the redirect port
+(`--trace`) that says whether the injected packet reaches the stack at all, and a second redirect
+shape (`--redirect-local`) that avoids the loopback fast path. Run them with
+`tools/verify-divert.ps1`. See `docs/THREAT_MODEL.md § What a live run established`.
 
 Packaged applications (W-4) now warn in the UI, and there is an MSI plus a GitHub Actions pipeline
 that builds it. Not written: a Windows service host, and code signing.

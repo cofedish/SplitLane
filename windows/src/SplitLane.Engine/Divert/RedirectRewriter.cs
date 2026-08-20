@@ -72,21 +72,49 @@ public static class RedirectRewriter
     /// Rewrites an application's outbound packet so it arrives at the redirect listener.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// The source <b>port</b> is deliberately left alone. It is the only field that survives the
     /// rewrite intact, and it is what both the listener and the return path use to find the
     /// connection's NAT entry.
+    /// </para>
+    /// <para>
+    /// Two shapes, because the loopback one is not confirmed to work. See ADR W-0001 and
+    /// docs/THREAT_MODEL.md.
+    /// </para>
     /// </remarks>
-    public static bool TryRedirectToListener(Span<byte> packet, ushort listenerPort)
+    /// <param name="packet">The packet, rewritten in place.</param>
+    /// <param name="listenerPort">Where the redirect listener is bound.</param>
+    /// <param name="useLoopback">
+    /// When true, both endpoints move to <c>127.0.0.1</c>. When false, only the destination changes,
+    /// to the address the application already bound — which is a local address on this machine, so
+    /// the packet is delivered locally without involving the loopback path at all.
+    /// </param>
+    public static bool TryRedirectToListener(Span<byte> packet, ushort listenerPort, bool useLoopback = true)
     {
         if (!PacketView.TryParse(packet, out var view) || !view.HasPorts)
         {
             return false;
         }
 
-        var loopback = view.IsIPv6 ? LoopbackV6 : LoopbackV4;
+        if (useLoopback)
+        {
+            // Both endpoints move together. Rewriting only the destination would leave a packet
+            // addressed 192.168.1.5 -> 127.0.0.1, which the stack drops as a martian: an address in
+            // 127/8 is only valid paired with another one.
+            var loopback = view.IsIPv6 ? LoopbackV6 : LoopbackV4;
+            view.SetSourceAddress(loopback);
+            view.SetDestinationAddress(loopback);
+        }
+        else
+        {
+            // Send it to the machine's own address - the one the application is already sending
+            // from. Source and destination are then the same local address, which is an ordinary
+            // local delivery the stack handles without the loopback fast path.
+            Span<byte> local = stackalloc byte[view.IsIPv6 ? 16 : 4];
+            view.SourceAddress.CopyTo(local);
+            view.SetDestinationAddress(local);
+        }
 
-        view.SetSourceAddress(loopback);
-        view.SetDestinationAddress(loopback);
         view.DestinationPort = listenerPort;
         view.RecomputeChecksums();
         return true;

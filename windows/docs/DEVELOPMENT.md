@@ -131,6 +131,45 @@ Nothing is code-signed. The workflow writes `SHA256SUMS.txt` and the release not
 SmartScreen will warn, rather than leaving each person to wonder whether their download was tampered
 with.
 
+## Verifying interception
+
+This is the test that decides whether SplitLane works. Everything else is covered by `dotnet test`;
+interception is not, because it needs a kernel driver and elevation.
+
+```powershell
+.\tools\verify-divert.ps1 -Mode loopback -Trace
+.\tools\verify-divert.ps1 -Mode local -Trace
+```
+
+The script starts the bundled SOCKS5 server, writes a configuration with one rule for `curl.exe`,
+starts the engine elevated (accept the UAC prompt), runs curl, and reports the verdict. It cleans up
+after itself unless you pass `-KeepRunning`.
+
+The proof comes from the **upstream side**: the test server logs every CONNECT it is asked for. If a
+selected application's connection was really intercepted and relayed, it appears there by name. A
+count of redirected packets proves only that SplitLane rewrote something.
+
+`-Trace` opens a sniffing handle on the redirect port and reports what the stack actually carries.
+That distinguishes the two possible failures, which need opposite investigations: a redirected SYN
+that appears means the injection worked and the listening socket is the problem; one that never
+appears means the injection is being discarded.
+
+Two things about the test itself are load-bearing:
+
+- **`curl` is told to ignore the machine's proxy settings.** On a machine running a local proxy
+  client almost every application connects to `127.0.0.1`, and SplitLane correctly declines to proxy
+  loopback destinations. Without that flag the test measures the loop defence rather than the
+  redirect — which is exactly what happened the first time it was run.
+- **`curl.exe` lives in System32**, so the rule is matched exactly. That also exercises the
+  shared-directory guard of ADR W-0003, which refuses family matching there.
+
+### Mode
+
+| | |
+|---|---|
+| `loopback` | The original design: both endpoints move to `127.0.0.1`. Does not currently deliver. |
+| `local` | Only the destination changes, to the machine's own address, avoiding the loopback fast path. The listener then has to accept on all local addresses — see W-5. |
+
 ## Layout
 
 ```
@@ -143,6 +182,7 @@ tests/SplitLane.Engine.Tests/ 61 tests: packet rewrite, NAT table, DNS parser, r
 tools/socks5-testbed/        the SOCKS5 server used by tests and by hand
 tools/fetch-windivert.ps1    downloads the driver; never commits it
 tools/build-installer.ps1    publishes both apps and builds the MSI; CI runs this same script
+tools/verify-divert.ps1      the elevated end-to-end interception test
 tools/uiprobe/               the screenshot and UI-automation harness
 installer/                   WiX 5 sources. Not in the solution; see Packaging.
 runtime/windivert/           where the driver lands. Git-ignored.
