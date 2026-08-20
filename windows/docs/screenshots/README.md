@@ -1,7 +1,12 @@
 # Screenshots
 
-Captured by `tools/uiprobe/uiprobe.ps1` driving the real application through UI Automation, with the
-engine running in `--no-divert` mode. Nothing here is a mockup.
+Captured by `tools/uiprobe/uiprobe.ps1` driving the real application through UI Automation. Nothing
+here is a mockup.
+
+`1`-`6` were taken against a development build with the engine in `--no-divert` mode. `7` is the
+installed product: the MSI installed to Program Files, the engine started from there with WinDivert
+loaded, and the app reporting it as live - counters, driver version and redirect port all read from
+a running engine over the control channel.
 
 | | |
 |---|---|
@@ -11,6 +16,7 @@ engine running in `--no-divert` mode. Nothing here is a mockup.
 | `4-proxy.png` | Upstream settings after a successful reachability test against a real SOCKS5 proxy. |
 | `5-activity.png` | Recent connections. DIRECT decisions are counted, not listed. |
 | `6-settings.png` | Diagnostics, storage, and the honest statement about how this differs from macOS. |
+| `7-routing.png` | The installed build, connected to the installed engine with the driver loaded. |
 
 The window is captured from the screen rather than rendered offscreen, so the composition backdrop is
 included. The probe verifies it has foreground before reading pixels — an earlier version did not,
