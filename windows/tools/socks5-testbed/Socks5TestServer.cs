@@ -75,6 +75,15 @@ public sealed class Socks5TestServer : IAsyncDisposable
     /// <summary>The address type tag of the most recent CONNECT.</summary>
     public byte LastRequestedAddressType { get; private set; }
 
+    /// <summary>
+    /// Raised for every CONNECT the server accepts, with the destination as it arrived on the wire.
+    /// </summary>
+    /// <remarks>
+    /// This is how a divert-layer run is proved rather than assumed: if a selected application's
+    /// connection really was intercepted and relayed, it shows up here, named, on the upstream side.
+    /// </remarks>
+    public event Action<string, ushort>? ConnectRequested;
+
     private async Task AcceptLoopAsync(CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
@@ -185,6 +194,7 @@ public sealed class Socks5TestServer : IAsyncDisposable
             var port = BinaryPrimitives.ReadUInt16BigEndian(buffer.AsSpan(cursor, 2));
             LastRequestedHost = host;
             LastRequestedPort = port;
+            ConnectRequested?.Invoke(host, port);
 
             if (_options.RejectWith is { } rejection)
             {

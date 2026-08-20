@@ -165,32 +165,70 @@ that a password exists; it has no path to read one back.
 RFC 1929 still sends the credential to the proxy unencrypted. On loopback that is irrelevant; to a
 remote proxy it is not, and the Proxy page warns when the endpoint is not loopback.
 
-## Unverified
+## What a live run established
 
-This section is the Windows equivalent of the macOS project's "highest open risk", and it is the most
-important part of this document.
+The divert layer has now been run against the driver on a real machine, elevated, with a selected
+application and a controlled SOCKS5 upstream. This section records what that proved and what it did
+not, because "we tried it" is not a result.
 
-### The WinDivert reinjection path has never run against the driver
+**Verified against the driver:**
 
-Everything in this repository builds with zero warnings, and 322 tests pass. Those tests cover the
-rule engine exhaustively, the SOCKS5 codec byte by byte, the packet rewrite and its checksums against
-constructed packets, the NAT table including expiry, the DNS parser including malformed input, and
-the relay end-to-end against a real SOCKS5 server.
+- WinDivert 2.2 loads, and all three handles open. The socket, network and DNS filter strings are
+  accepted by the driver — previously all four of those were guesses.
+- The socket layer delivers events and `WINDIVERT_DATA_SOCKET` is laid out correctly: process ids,
+  ports and protocol all read back sensibly.
+- `ProcessResolver` turns a pid into the right image path on live traffic. Decisions were logged
+  naming `curl.exe`, `firefox.exe`, `Code.exe` correctly.
+- `RuleEngine` decides correctly on real connections. A selected application produced
+  `PROXY curl.exe :51849 -> example.com:80`.
+- **Loop defence works on real traffic, and caught a genuine case.** On a machine with a local proxy
+  client, almost every application connects to `127.0.0.1:10808`; SplitLane declined every one of
+  them with "destination is loopback or link-local". The first test run looked like a failure and was
+  the second layer of loop defence doing its job.
+- The DNS observer works. The destination was reported as `example.com`, recovered from a sniffed
+  answer rather than from the address the socket carried, which is what lets the SOCKS5 request use
+  `ATYP=DOMAIN`.
+- The NAT table records on CONNECT and expires as designed.
+- The packet layer captures, rewrites and reinjects. WinDivert **accepted** every injection —
+  `send failures 0` across every run.
 
-What they do **not** cover, because it needs an installed kernel driver and an elevated process:
+**Still not working:**
 
-1. **The reinjection flags.** Whether setting `Loopback` on a redirected outbound packet, and
-   clearing `Outbound` on a restored reply, produces delivery the Windows stack accepts. This is the
-   single most likely thing to be wrong.
-2. **`WINDIVERT_ADDRESS` layout.** The struct is mirrored by hand from the ABI. It is exercised only
-   by construction, never by the driver filling it in.
-3. **IPv6 address word order** in socket-layer events. This is why `SocketAddressReader` calls
-   WinDivert's own formatter for IPv6 rather than unpacking the words itself — but the call itself is
-   unexercised.
-4. **Filter acceptance.** The filter strings are written to the documented grammar and have never
-   been compiled by the driver.
+The rewritten loopback packet never arrives at the redirect listener. The application's SYN is
+redirected (ten packets over twenty seconds — retransmissions), the driver accepts the injection
+without error, and nothing is ever accepted on the listening socket. The connection then fails, which
+is at least the correct direction to fail in: the selected application got a dead connection rather
+than a silent DIRECT leak.
 
-Until an elevated run on a machine with the driver installed confirms a selected application's
-connection completing through the proxy, the correct description of the divert layer is
-**implemented, compiled and unit-tested — not verified**. Anything stronger would be a claim this
-work has not earned.
+Both injection shapes were tried: outbound with the loopback flag set, and inbound on interface 1.
+Neither delivered. Since `WinDivertSend` reports success in both cases, the packet is being discarded
+by the stack after injection, which points at the rewritten packet itself or at the injection path
+rather than at the API call.
+
+Next things to try, in order of likelihood:
+
+1. Capture the injected packet with a second sniffing handle to see what the stack actually receives.
+   Everything above is inferred from counters; this would make it observable.
+2. Leave the source address alone and redirect only the destination, to the machine's own LAN address
+   rather than loopback, with the listener bound there. That avoids the martian-address problem
+   entirely at the cost of a listener that is not loopback-only (see W-5).
+3. Check whether Windows' loopback fast path accepts injected packets at all, which would make the
+   whole loopback-NAT shape the wrong approach on modern builds and send ADR W-0001 back for review.
+
+**So the honest status is unchanged in substance and much narrower in scope**: the divert layer is
+implemented, compiled, unit-tested, and now driver-exercised end to end up to the final loopback hop,
+which does not work. Everything before that hop is confirmed working on live traffic.
+
+## Bugs the live run found
+
+Three, all of the same family — a failure that reported nothing:
+
+- **`WinDivertRecv` failures were slept through.** The socket pump returned a bare false and the loop
+  spun on a one-millisecond sleep forever, routing nothing. From the outside it was indistinguishable
+  from a machine with no traffic on it. The Win32 error is now reported.
+- **`WinDivertSend` results were discarded.** A refused injection is a connection that hangs with no
+  error anywhere. Now counted and logged.
+- **Console logging can hang the entire engine.** The engine logs to a file and to the console. In an
+  elevated console window with QuickEdit enabled, a stray selection blocks `Console.WriteLine`, and
+  with it every thread that logs — the engine stopped after one line and never opened its control
+  channel. This is a real hang in a process that is meant to run unattended.

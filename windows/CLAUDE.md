@@ -69,15 +69,23 @@ Core, engine and app are written, build with zero warnings, and 322 tests pass. 
 driven end to end, and screenshotted. The engine has been run in `--no-divert` mode and its control
 channel, rule engine, redirect listener and SOCKS5 relay verified against a real proxy.
 
-**The divert layer has never run against the driver.** The packet arithmetic, NAT table, DNS parser
-and relay are unit- and integration-tested; the WinDivert reinjection path is not. Reinjection flags,
-`WINDIVERT_ADDRESS` layout, IPv6 word order and filter acceptance are all unverified. Until an
-elevated run confirms a selected application's connection completing through the proxy, the honest
-description is **implemented, compiled and unit-tested — not verified**. See
-`docs/THREAT_MODEL.md § Unverified`.
+**The divert layer has been run against the driver, and works up to the last hop.** Driver load,
+filter acceptance, `WINDIVERT_ADDRESS` layout, socket-layer events, pid-to-path resolution, the
+routing decision, loop defence, the DNS observer, the NAT table and packet rewriting are all
+confirmed on live traffic. WinDivert accepts every injection.
+
+**The rewritten loopback packet never reaches the redirect listener.** The connection fails, which is
+at least the right direction to fail in, but a selected application cannot yet be proxied. Both
+injection shapes were tried. See `docs/THREAT_MODEL.md § What a live run established` for the
+evidence and the next three things to try.
 
 Packaged applications (W-4) now warn in the UI, and there is an MSI plus a GitHub Actions pipeline
 that builds it. Not written: a Windows service host, and code signing.
+
+The live run also found three bugs of one family — failures that reported nothing. A failed
+`WinDivertRecv` was slept through, a failed `WinDivertSend` was discarded, and console logging could
+hang the whole engine from a stray click in an elevated window. All three are fixed, and the lesson
+generalises: in this codebase, a silent failure is the bug.
 
 ## Definition of Done
 

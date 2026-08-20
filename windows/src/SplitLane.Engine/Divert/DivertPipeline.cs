@@ -47,6 +47,9 @@ public sealed class DivertPipeline : IAsyncDisposable
     /// <summary>Maximum packet WinDivert will hand back, plus room for the largest jumbo frame.</summary>
     private const int PacketBufferSize = 0xFFFF;
 
+    /// <summary>Interface index of the loopback adapter, which is fixed on Windows.</summary>
+    private const uint LoopbackInterfaceIndex = 1;
+
     private readonly NatTable _nat;
     private readonly DnsObserver _dns;
     private readonly ProcessResolver _processes;
@@ -71,6 +74,11 @@ public sealed class DivertPipeline : IAsyncDisposable
     private Thread? _dnsThread;
     private volatile bool _running;
     private ushort _listenerPort;
+    private long _socketEvents;
+    private long _packetsSeen;
+    private long _redirected;
+    private long _sendFailures;
+    private Timer? _heartbeat;
 
     /// <summary>Builds a pipeline over the shared engine state.</summary>
     public DivertPipeline(
@@ -181,6 +189,18 @@ public sealed class DivertPipeline : IAsyncDisposable
             _dnsThread = StartThread("SplitLane.DnsObserver", () => DnsLoop(_dnsHandle));
         }
 
+        // A heartbeat, because "nothing is happening" and "everything is broken" are otherwise
+        // indistinguishable from outside. Debug level, so it costs nothing in normal operation.
+        _heartbeat = new Timer(
+            _ => SplitLaneLog.Debug(
+                LogCategory,
+                $"socket events {Interlocked.Read(ref _socketEvents)}, " +
+                $"packets {Interlocked.Read(ref _packetsSeen)}, " +
+                $"redirected {Interlocked.Read(ref _redirected)}, " +
+                $"send failures {Interlocked.Read(ref _sendFailures)}, " +
+                $"nat entries {_nat.Count}"),
+            null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
+
         SplitLaneLog.Info(
             LogCategory,
             $"divert started, driver {DriverVersion ?? "unknown"}, listener port {listenerPort}");
@@ -199,22 +219,36 @@ public sealed class DivertPipeline : IAsyncDisposable
 
     private void SocketLoop(DivertHandle handle)
     {
+        var failures = 0;
+
         try
         {
             while (_running)
             {
-                if (!handle.Receive(Span<byte>.Empty, out _, out var address))
+                if (!handle.Receive(Span<byte>.Empty, out _, out var address, out var error))
                 {
-                    if (_running)
+                    if (!_running)
                     {
-                        // A sniffing handle with no packet buffer returns the event in the address
-                        // alone; a false here after shutdown is the normal way out.
-                        Thread.Sleep(1);
+                        return;
                     }
 
+                    // A failing receive is reported, not slept through. The first version spun here
+                    // on a one-millisecond sleep and routed nothing, which from the outside looked
+                    // exactly like a machine with no traffic on it.
+                    if (++failures is 1 or 100 or 1000)
+                    {
+                        SplitLaneLog.Error(
+                            LogCategory,
+                            $"socket layer receive failed (Win32 {error}), {failures} so far - no " +
+                            "application identity is reaching the router, so everything is DIRECT");
+                    }
+
+                    Thread.Sleep(failures < 100 ? 1 : 50);
                     continue;
                 }
 
+                failures = 0;
+                Interlocked.Increment(ref _socketEvents);
                 HandleSocketEvent(address);
             }
         }
@@ -309,6 +343,10 @@ public sealed class DivertPipeline : IAsyncDisposable
                     local, remote, socket.RemotePort, socket.ProcessId, path, rule, hostname,
                     DateTimeOffset.UtcNow));
                 _statistics.CountProxied();
+                SplitLaneLog.Debug(
+                    LogCategory,
+                    $"PROXY {ExecutablePath.FileName(path)} :{socket.LocalPort} -> " +
+                    $"{flow.DestinationDisplay}");
                 break;
 
             case RouteAction.Block:
@@ -333,20 +371,31 @@ public sealed class DivertPipeline : IAsyncDisposable
     private void NetworkLoop(DivertHandle handle)
     {
         var buffer = GC.AllocateArray<byte>(PacketBufferSize, pinned: true);
+        var failures = 0;
 
         try
         {
             while (_running)
             {
-                if (!handle.Receive(buffer, out var length, out var address))
+                if (!handle.Receive(buffer, out var length, out var address, out var error))
                 {
                     if (!_running)
                     {
                         return;
                     }
 
+                    if (++failures is 1 or 100 or 1000)
+                    {
+                        SplitLaneLog.Error(
+                            LogCategory, $"packet receive failed (Win32 {error}), {failures} so far");
+                    }
+
+                    Thread.Sleep(failures < 100 ? 1 : 50);
                     continue;
                 }
+
+                failures = 0;
+                Interlocked.Increment(ref _packetsSeen);
 
                 var packet = buffer.AsSpan(0, length);
                 var action = Classify(packet, ref address);
@@ -358,7 +407,22 @@ public sealed class DivertPipeline : IAsyncDisposable
 
                 // Everything not dropped is reinjected — modified for a redirected connection,
                 // byte-for-byte identical for everything else.
-                handle.Send(packet, ref address);
+                if (action == PacketAction.Rewritten)
+                {
+                    // Let the driver settle the checksums and their flags on anything we changed.
+                    handle.CalculateChecksums(packet, ref address);
+                }
+
+                if (!handle.Send(packet, ref address, out var sendError) && _running)
+                {
+                    if (Interlocked.Increment(ref _sendFailures) is 1 or 100 or 1000)
+                    {
+                        SplitLaneLog.Error(
+                            LogCategory,
+                            $"reinjection refused (Win32 {sendError}) — a refused packet is a " +
+                            "connection that hangs with no error anywhere");
+                    }
+                }
             }
         }
         catch (Exception ex) when (_running)
@@ -369,7 +433,13 @@ public sealed class DivertPipeline : IAsyncDisposable
 
     private enum PacketAction
     {
+        /// <summary>Reinject unchanged.</summary>
         Forward,
+
+        /// <summary>Reinject after a rewrite, so the checksums have to be settled first.</summary>
+        Rewritten,
+
+        /// <summary>Do not reinject.</summary>
         Drop,
     }
 
@@ -399,10 +469,18 @@ public sealed class DivertPipeline : IAsyncDisposable
         {
             if (RedirectRewriter.TryRedirectToListener(packet, _listenerPort))
             {
+                // The packet is now loopback-to-loopback and its destination is a socket on this
+                // machine, so it is injected INBOUND on the loopback interface rather than sent
+                // outbound. Injected outbound, WinDivert accepts it and the stack silently discards
+                // it: the send succeeds, no error is raised anywhere, and the application's SYN
+                // simply retransmits until it gives up. That was observed directly - ten packets
+                // redirected, zero send failures, nothing ever arriving at the listener.
                 address.Loopback = true;
-                address.TCPChecksum = true;
-                address.IPChecksum = true;
-                return PacketAction.Forward;
+                address.Outbound = false;
+                address.Network.IfIdx = LoopbackInterfaceIndex;
+                address.Network.SubIfIdx = 0;
+                Interlocked.Increment(ref _redirected);
+                return PacketAction.Rewritten;
             }
         }
 
@@ -443,9 +521,7 @@ public sealed class DivertPipeline : IAsyncDisposable
         // and is delivered inbound to the application's socket.
         address.Loopback = false;
         address.Outbound = false;
-        address.TCPChecksum = true;
-        address.IPChecksum = true;
-        return PacketAction.Forward;
+        return PacketAction.Rewritten;
     }
 
     private static bool AddressMatches(ReadOnlySpan<byte> packetAddress, IPAddress expected)
@@ -466,13 +542,14 @@ public sealed class DivertPipeline : IAsyncDisposable
         {
             while (_running)
             {
-                if (!handle.Receive(buffer, out var length, out _))
+                if (!handle.Receive(buffer, out var length, out _, out _))
                 {
                     if (!_running)
                     {
                         return;
                     }
 
+                    Thread.Sleep(5);
                     continue;
                 }
 
@@ -512,6 +589,9 @@ public sealed class DivertPipeline : IAsyncDisposable
 
         // Shutdown before close: a thread parked inside WinDivertRecv must be released first, and
         // closing the handle underneath it is not defined behaviour.
+        _heartbeat?.Dispose();
+        _heartbeat = null;
+
         _socketHandle?.Shutdown();
         _networkHandle?.Shutdown();
         _dnsHandle?.Shutdown();

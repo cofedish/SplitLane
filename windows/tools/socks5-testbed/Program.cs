@@ -13,6 +13,9 @@ await using var server = new Socks5TestServer(new Socks5TestServerOptions
     Password = requireAuth ? "testbed" : null,
 });
 
+server.ConnectRequested += (host, port) =>
+    Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] CONNECT {host}:{port}");
+
 Console.WriteLine($"SOCKS5 testbed listening on 127.0.0.1:{server.Port}");
 
 if (requireAuth)

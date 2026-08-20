@@ -18,7 +18,17 @@ internal static class Program
         SplitLanePaths.EnsureCreated();
         SplitLaneLog.MinimumLevel = options.Verbose ? LogLevel.Debug : LogLevel.Info;
         SplitLaneLog.AddSink(new RollingFileLogSink(SplitLanePaths.EngineLog));
-        SplitLaneLog.AddSink(new ConsoleLogSink());
+
+        // Console output is opt-out, because it can hang the whole engine. In a console window with
+        // QuickEdit enabled - the Windows default - a stray click puts the window into selection
+        // mode and blocks Console.WriteLine indefinitely, taking every thread that logs with it.
+        // That was observed: the engine printed one line, never opened its control channel, and sat
+        // there looking alive. A routing engine meant to run unattended must not be stoppable by a
+        // mouse click in a window nobody is looking at.
+        if (!args.Contains("--no-console-log", StringComparer.OrdinalIgnoreCase))
+        {
+            SplitLaneLog.AddSink(new ConsoleLogSink());
+        }
 
         if (args.Contains("--check", StringComparer.OrdinalIgnoreCase))
         {

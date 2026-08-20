@@ -163,12 +163,27 @@ public sealed class DivertHandle : IDisposable
     }
 
     /// <summary>
-    /// Receives one packet or event. Returns false when the handle has been shut down.
+    /// Receives one packet or event. Returns false when the handle has been shut down or errored.
     /// </summary>
-    public unsafe bool Receive(Span<byte> buffer, out int length, out WinDivertAddress address)
+    /// <param name="buffer">
+    /// Where to put the packet. Pass an empty span on the socket and flow layers, which carry no
+    /// packet data — the event is entirely in <paramref name="address"/>.
+    /// </param>
+    /// <param name="length">Bytes written to <paramref name="buffer"/>.</param>
+    /// <param name="address">The per-packet or per-event metadata.</param>
+    /// <param name="error">
+    /// The Win32 error when this returns false, or 0 for a clean shutdown.
+    /// </param>
+    /// <remarks>
+    /// The error is reported rather than swallowed. An earlier version returned a bare false, and a
+    /// caller that could not tell "shutting down" from "failing every call" spun quietly forever
+    /// while routing nothing — which is precisely the silent failure this product exists to avoid.
+    /// </remarks>
+    public unsafe bool Receive(Span<byte> buffer, out int length, out WinDivertAddress address, out int error)
     {
         length = 0;
         address = default;
+        error = 0;
 
         if (!IsOpen)
         {
@@ -179,13 +194,25 @@ public sealed class DivertHandle : IDisposable
         WinDivertAddress local = default;
 
         bool ok;
-        fixed (byte* packet = buffer)
+
+        // On a layer with no packet data both the buffer and the length pointer are passed as null.
+        // WinDivert documents them as optional, and handing it a length pointer for a packet that
+        // does not exist is the kind of detail a driver is entitled to reject.
+        if (buffer.IsEmpty)
         {
-            ok = WinDivertNative.Recv(_handle, packet, (uint)buffer.Length, &received, &local);
+            ok = WinDivertNative.Recv(_handle, null, 0, null, &local);
+        }
+        else
+        {
+            fixed (byte* packet = buffer)
+            {
+                ok = WinDivertNative.Recv(_handle, packet, (uint)buffer.Length, &received, &local);
+            }
         }
 
         if (!ok)
         {
+            error = Marshal.GetLastWin32Error();
             return false;
         }
 
@@ -194,20 +221,65 @@ public sealed class DivertHandle : IDisposable
         return true;
     }
 
-    /// <summary>Reinjects a packet. Returns false when the handle has been shut down.</summary>
-    public unsafe bool Send(ReadOnlySpan<byte> buffer, ref WinDivertAddress address)
+    /// <summary>Reinjects a packet, reporting the Win32 error when it fails.</summary>
+    /// <remarks>
+    /// The result used to be discarded. A packet that the driver refuses to inject is a connection
+    /// that hangs with no error anywhere — the single hardest failure to diagnose in this design, and
+    /// exactly the one worth a log line.
+    /// </remarks>
+    public unsafe bool Send(ReadOnlySpan<byte> buffer, ref WinDivertAddress address, out int error)
     {
+        error = 0;
+
         if (!IsOpen)
         {
             return false;
         }
 
         uint sent = 0;
+        bool ok;
 
         fixed (byte* packet = buffer)
         fixed (WinDivertAddress* addr = &address)
         {
-            return WinDivertNative.Send(_handle, packet, (uint)buffer.Length, &sent, addr);
+            ok = WinDivertNative.Send(_handle, packet, (uint)buffer.Length, &sent, addr);
+        }
+
+        if (!ok)
+        {
+            error = Marshal.GetLastWin32Error();
+        }
+
+        return ok;
+    }
+
+    /// <summary>
+    /// Recomputes every checksum the packet needs, and updates the address flags to match.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// SplitLane computes checksums itself in <c>PacketView</c>, because that arithmetic has to be
+    /// reachable from a unit test with no driver installed. But for a packet about to be handed back
+    /// to the driver, the library's own helper is authoritative: it also reconciles the
+    /// checksum-valid flags in <c>WINDIVERT_ADDRESS</c>, which the stack consults and which a
+    /// hand-rolled rewrite has no way to set correctly for every offload configuration.
+    /// </para>
+    /// <para>
+    /// Getting this wrong does not produce an error. It produces a packet the receiving stack
+    /// silently discards.
+    /// </para>
+    /// </remarks>
+    public unsafe bool CalculateChecksums(Span<byte> buffer, ref WinDivertAddress address)
+    {
+        if (!IsOpen)
+        {
+            return false;
+        }
+
+        fixed (byte* packet = buffer)
+        fixed (WinDivertAddress* addr = &address)
+        {
+            return WinDivertNative.CalcChecksums(packet, (uint)buffer.Length, addr, 0);
         }
     }
 
