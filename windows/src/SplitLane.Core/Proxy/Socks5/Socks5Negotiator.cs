@@ -110,15 +110,31 @@ public sealed class Socks5Negotiator
     private readonly Socks5Address _destination;
     private readonly ushort _port;
     private readonly Socks5Credential? _credential;
+    private readonly Socks5Command _command;
     private readonly List<byte> _buffer = [];
     private Socks5Method _selectedMethod = Socks5Method.NoAuthentication;
 
-    /// <summary>Builds a handshake for one destination.</summary>
-    public Socks5Negotiator(Socks5Address destination, ushort port, Socks5Credential? credential = null)
+    /// <summary>
+    /// Builds a handshake for one destination.
+    /// </summary>
+    /// <param name="destination">Where the tunnel goes, or the address datagrams will come from.</param>
+    /// <param name="port">Its port.</param>
+    /// <param name="credential">Username and password, when the proxy asks for them.</param>
+    /// <param name="command">
+    /// What to ask the proxy for. <see cref="Socks5Command.Connect"/> opens a tunnel;
+    /// <see cref="Socks5Command.UdpAssociate"/> asks for a datagram relay, and the reply's bound
+    /// address is then where datagrams are sent rather than a confirmation nobody reads.
+    /// </param>
+    public Socks5Negotiator(
+        Socks5Address destination,
+        ushort port,
+        Socks5Credential? credential = null,
+        Socks5Command command = Socks5Command.Connect)
     {
         _destination = destination;
         _port = port;
         _credential = credential;
+        _command = command;
     }
 
     /// <summary>Current state.</summary>
@@ -320,7 +336,7 @@ public sealed class Socks5Negotiator
         var address = _destination.Encode();
         var request = new byte[address.Length + 5];
         request[0] = Socks5.Version;
-        request[1] = (byte)Socks5Command.Connect;
+        request[1] = (byte)_command;
         request[2] = Socks5.Reserved;
         address.CopyTo(request, 3);
         request[^2] = (byte)(_port >> 8);
