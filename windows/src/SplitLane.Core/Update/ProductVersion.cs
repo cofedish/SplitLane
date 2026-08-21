@@ -91,11 +91,15 @@ public readonly record struct ProductVersion(int Major, int Minor, int Patch, in
             ? string.Create(CultureInfo.InvariantCulture, $"{Major}.{Minor}.{Patch}")
             : string.Create(CultureInfo.InvariantCulture, $"{Major}.{Minor}.{Patch}.{Build}");
 
+    /// <summary>Whether the left version is older.</summary>
     public static bool operator <(ProductVersion left, ProductVersion right) => left.CompareTo(right) < 0;
 
+    /// <summary>Whether the left version is newer.</summary>
     public static bool operator >(ProductVersion left, ProductVersion right) => left.CompareTo(right) > 0;
 
+    /// <summary>Whether the left version is the same or older.</summary>
     public static bool operator <=(ProductVersion left, ProductVersion right) => left.CompareTo(right) <= 0;
 
+    /// <summary>Whether the left version is the same or newer.</summary>
     public static bool operator >=(ProductVersion left, ProductVersion right) => left.CompareTo(right) >= 0;
 }

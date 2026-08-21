@@ -121,8 +121,8 @@ public sealed class UpdateService : IDisposable
 
         try
         {
-            var manifestJson = await _http.GetStringAsync(ManifestUrl, cancellationToken).ConfigureAwait(false);
-            var signature = await _http.GetStringAsync(SignatureUrl, cancellationToken).ConfigureAwait(false);
+            var manifestJson = await FetchAsync(ManifestUrl, cancellationToken).ConfigureAwait(false);
+            var signature = await FetchAsync(SignatureUrl, cancellationToken).ConfigureAwait(false);
 
             var rejection = ManifestVerifier.Verify(
                 manifestJson, signature, ReleaseKey.PublicKeySpki, out var manifest);
@@ -220,6 +220,28 @@ public sealed class UpdateService : IDisposable
         {
             _gate.Release();
         }
+    }
+
+    /// <summary>
+    /// Fetches one document from the feed, saying what happened when it cannot.
+    /// </summary>
+    /// <remarks>
+    /// The status code is kept because the interesting failures are distinguishable by it and by
+    /// nothing else. A 404 on the whole feed does not mean "no update"; it means the releases are not
+    /// published where an unauthenticated engine can read them - which is what a private repository
+    /// looks like from here, and which no amount of retrying will change.
+    /// </remarks>
+    private async Task<string> FetchAsync(string url, CancellationToken cancellationToken)
+    {
+        using var response = await _http.GetAsync(url, cancellationToken).ConfigureAwait(false);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new HttpRequestException(
+                $"the update feed answered {(int)response.StatusCode} {response.ReasonPhrase}");
+        }
+
+        return await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private async Task DownloadAsync(string url, string destination, CancellationToken cancellationToken)

@@ -108,6 +108,7 @@ public sealed record AppIdentity
     [JsonIgnore]
     public bool SupportsPackageMatching => PackageFamily.Length > 0;
 
+    /// <summary>The path segment carrying the version, for a packaged app.</summary>
     [JsonIgnore]
     public string? VersionedSegment
     {

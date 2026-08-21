@@ -249,6 +249,11 @@ docs/screenshots/            captures of the running application
   or a user logout - the two things it exists to survive.
 - Nothing is code-signed, so SmartScreen warns and the driver has to be trusted on the strength of
   its own signature rather than ours.
+- **Updates cannot be delivered while the repository is private.** The mechanism works — see ADR
+  W-0011, and the signing is verified — but release assets on a private repository answer 404 to an
+  anonymous request, which is what the engine makes and all it can make. A token compiled into the
+  build would put one credential with read access to a private repository into every installation.
+  The fix is a public location for the artifacts, not a credential.
 - Interception has been verified on IPv4 only. IPv6, sleep and resume, and adapter changes mid-flow
   are untested.
 - The installer has been installed, driven and uninstalled by hand on one machine, on Windows 11.

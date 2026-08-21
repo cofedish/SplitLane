@@ -171,6 +171,14 @@ it across the privilege boundary, and routing works through it - a selected appl
 TEST-NET, which routes nowhere, so the only way there was the proxy, while the unselected control
 timed out. Uninstall stops and removes it.
 
+**Self-update is built and cannot run yet.** The engine checks a signed manifest once a day and
+installs when asked; the signing pipeline is verified end to end, and a published manifest is
+accepted by the key the build ships while an edited copy is refused. What does not work is the
+delivery: **the repository is private**, so release assets answer 404 to an unauthenticated request,
+and the engine has no credentials and must not be given any. Either the repository goes public or
+releases are published somewhere an anonymous GET can read them. Until then the update card reports
+the failure and routing is unaffected.
+
 Not written: code signing.
 
 The live run also found three bugs of one family — failures that reported nothing. A failed
