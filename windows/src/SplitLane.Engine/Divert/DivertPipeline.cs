@@ -1,12 +1,15 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net;
+using System.Net.Sockets;
 using SplitLane.Core.Logging;
 using SplitLane.Core.Models;
+using SplitLane.Core.Proxy.Socks5;
 using SplitLane.Core.Rules;
 using SplitLane.Engine.Flows;
 using SplitLane.Engine.Interop;
 using SplitLane.Engine.Net;
+using SplitLane.Engine.Relay;
 using SplitLane.Engine.Runtime;
 
 namespace SplitLane.Engine.Divert;
@@ -41,6 +44,14 @@ namespace SplitLane.Engine.Divert;
 /// </item>
 /// </list>
 /// </remarks>
+/// <summary>What was decided about a UDP socket when it bound.</summary>
+/// <param name="ProcessId">Who owns it. Diagnostic.</param>
+/// <param name="Action">
+/// Proxy to carry its datagrams, Block to refuse them. Never Direct: a selected application's
+/// datagrams do not leave this machine unproxied, and an unselected one is not in this table.
+/// </param>
+internal readonly record struct UdpSocketDecision(uint ProcessId, RouteAction Action);
+
 public sealed class DivertPipeline : IAsyncDisposable
 {
     private const string LogCategory = "divert";
@@ -76,7 +87,9 @@ public sealed class DivertPipeline : IAsyncDisposable
     /// without this map a selected application's QUIC traffic would be unattributable at the packet
     /// layer and would escape DIRECT — the exact leak ADR 0004 exists to prevent.
     /// </remarks>
-    private readonly ConcurrentDictionary<ushort, uint> _udpPortOwners = new();
+    private readonly ConcurrentDictionary<ushort, UdpSocketDecision> _udpPortOwners = new();
+    private readonly ConcurrentDictionary<ushort, IPAddress> _udpOrigins = new();
+    private UdpRelay? _udpRelay;
 
     private DivertHandle? _socketHandle;
     private DivertHandle? _networkHandle;
@@ -94,6 +107,8 @@ public sealed class DivertPipeline : IAsyncDisposable
     private long _decisionsWaitedFor;
     private long _decisionTimeouts;
     private long _traced;
+    private long _udpRedirected;
+    private long _udpRestored;
     private Timer? _heartbeat;
     private DivertHandle? _traceHandle;
     private Thread? _traceThread;
@@ -113,6 +128,21 @@ public sealed class DivertPipeline : IAsyncDisposable
     /// Everything known about the failure so far is inferred from counters. This makes it observed.
     /// </remarks>
     public bool TraceRedirects { get; init; }
+
+    /// <summary>
+    /// Whether a selected application's datagrams are carried through the proxy or refused.
+    /// </summary>
+    /// <remarks>
+    /// Off means refused, which is what this did for its whole life before the relay existed and is
+    /// still the safe answer. It never means passed through unproxied.
+    /// </remarks>
+    public bool ProxiesUdp { get; init; } = true;
+
+    /// <summary>Where the upstream is, read freshly because configuration changes underneath.</summary>
+    public Func<ProxyConfiguration>? Proxy { get; init; }
+
+    /// <summary>Its credential, read the same way.</summary>
+    public Func<Socks5Credential?>? Credential { get; init; }
 
     /// <summary>Builds a pipeline over the shared engine state.</summary>
     public DivertPipeline(
@@ -165,7 +195,14 @@ public sealed class DivertPipeline : IAsyncDisposable
     internal static string NetworkFilter(ushort listenerPort) =>
         $"(outbound and tcp and not loopback) or " +
         $"(outbound and tcp and loopback and tcp.SrcPort = {listenerPort}) or " +
-        $"(outbound and udp and not loopback)";
+        $"(outbound and udp and not loopback) or " +
+
+        // Loopback UDP, for the lanes' replies on their way back to the application. Every
+        // datagram between local sockets passes through here as a result, and the vast majority
+        // are somebody else's - they are recognised by lane port and forwarded untouched, which
+        // costs a dictionary lookup each. The alternative, naming the lane ports in the filter,
+        // would mean reopening the handle every time an application talks to a new host.
+        $"(outbound and udp and loopback)";
 
     /// <summary>Filter for the DNS observer: inbound answers only, sniffed.</summary>
     internal const string DnsFilter = "inbound and udp and udp.SrcPort = 53";
@@ -199,6 +236,11 @@ public sealed class DivertPipeline : IAsyncDisposable
         // drain thread. Dropping a packet here is a stalled connection, so the trade favours depth.
         _networkHandle.SetParam(WinDivertParam.QueueLength, 8192);
         _networkHandle.SetParam(WinDivertParam.QueueTime, 2000);
+
+        if (ProxiesUdp && Proxy is { } proxy && Credential is { } credential)
+        {
+            _udpRelay = new UdpRelay(proxy, credential);
+        }
 
         if (TraceRedirects)
         {
@@ -257,7 +299,13 @@ public sealed class DivertPipeline : IAsyncDisposable
                 $"late {Interlocked.Read(ref _lateDecisions)}, " +
                 $"waited {Interlocked.Read(ref _decisionsWaitedFor)}, " +
                 $"wait timeouts {Interlocked.Read(ref _decisionTimeouts)}, " +
-                $"nat entries {_nat.Count}"),
+                $"nat entries {_nat.Count}, " +
+                $"udp sent {_udpRelay?.Sent ?? 0}, " +
+                $"udp back {_udpRelay?.Received ?? 0}, " +
+                $"udp redirected {Interlocked.Read(ref _udpRedirected)}, " +
+                $"udp restored {Interlocked.Read(ref _udpRestored)}, " +
+                $"udp dropped {_udpRelay?.Refused ?? 0}, " +
+                $"lanes {_udpRelay?.Count ?? 0}"),
             null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
 
         SplitLaneLog.Info(
@@ -325,7 +373,14 @@ public sealed class DivertPipeline : IAsyncDisposable
         {
             case WinDivertEvent.SocketClose:
                 _nat.Remove(socket.LocalPort);
-                _udpPortOwners.TryRemove(socket.LocalPort, out _);
+
+                if (_udpPortOwners.TryRemove(socket.LocalPort, out _))
+                {
+                    // The association at the proxy outlives the socket that needed it otherwise, and
+                    // each one holds a TCP connection open there.
+                    _udpRelay?.Forget(socket.LocalPort);
+                }
+
                 return;
 
             case WinDivertEvent.SocketBind when socket.Protocol == PacketView.ProtocolUdp:
@@ -360,9 +415,15 @@ public sealed class DivertPipeline : IAsyncDisposable
         var flow = new FlowDescriptor(
             socket.ProcessId, path, "203.0.113.1", 0, FlowProtocol.Udp);
 
-        if (_engine().Decide(flow).Action == RouteAction.Block)
+        // Both answers are remembered now, because they lead to different work: a refused socket's
+        // datagrams are dropped where they are found, and a proxied socket's are carried. What is
+        // still not remembered is every other socket on the machine, which would be both larger and
+        // a description of what the user is doing.
+        var action = _engine().Decide(flow).Action;
+
+        if (action is RouteAction.Block or RouteAction.Proxy)
         {
-            _udpPortOwners[socket.LocalPort] = socket.ProcessId;
+            _udpPortOwners[socket.LocalPort] = new UdpSocketDecision(socket.ProcessId, action);
         }
     }
 
@@ -554,7 +615,7 @@ public sealed class DivertPipeline : IAsyncDisposable
 
         if (view.Protocol == PacketView.ProtocolUdp)
         {
-            return ClassifyUdp(view);
+            return ClassifyUdp(packet, view, ref address);
         }
 
         // Reply from the redirect listener on its way back to the application.
@@ -626,16 +687,58 @@ public sealed class DivertPipeline : IAsyncDisposable
         return PacketAction.Forward;
     }
 
-    private PacketAction ClassifyUdp(in PacketView view)
+    private PacketAction ClassifyUdp(Span<byte> packet, in PacketView view, ref WinDivertAddress address)
     {
-        if (!_udpPortOwners.ContainsKey(view.SourcePort))
+        // A reply coming back from one of our own lanes, on its way to the application. Rewritten so
+        // it carries the address the application wrote to, which is the whole point of the lane.
+        if (_udpRelay is { } relay && address.Loopback &&
+            relay.TryResolveLane(view.SourcePort, out var applicationPort, out var remote) &&
+            view.DestinationPort == applicationPort)
+        {
+            if (!_udpOrigins.TryGetValue(applicationPort, out var origin) ||
+                !RedirectRewriter.TryRestoreFromListener(
+                    packet, remote.Address, (ushort)remote.Port, origin))
+            {
+                return PacketAction.Drop;
+            }
+
+            Interlocked.Increment(ref _udpRestored);
+            return PacketAction.Rewritten;
+        }
+
+        if (!_udpPortOwners.TryGetValue(view.SourcePort, out var decision))
         {
             return PacketAction.Forward;
         }
 
-        // A selected application's datagram. Dropped, never forwarded: letting it out would be the
-        // silent QUIC bypass the design exists to prevent. The application sees the failure and falls
-        // back to TCP, which is proxied correctly.
+        // A selected application's datagram never leaves this machine as it is. Either it goes
+        // through the proxy or it goes nowhere; forwarding it would be the silent bypass the design
+        // exists to prevent.
+        if (decision.Action == RouteAction.Proxy && _udpRelay is not null && view.IsIPv4)
+        {
+            var destination = new IPAddress(view.DestinationAddress);
+            var lanePort = _udpRelay.LaneFor(view.SourcePort, destination, view.DestinationPort);
+
+            if (lanePort is null)
+            {
+                _statistics.CountBlocked();
+                return PacketAction.Drop;
+            }
+
+            // The application's own address, kept so the reply can be addressed back to it. The
+            // datagram's source is about to become loopback, and after that nothing in the packet
+            // remembers where it came from.
+            _udpOrigins[view.SourcePort] = new IPAddress(view.SourceAddress);
+
+            if (!RedirectRewriter.TryRedirectToListener(packet, lanePort.Value, UseLoopbackRedirect))
+            {
+                return PacketAction.Drop;
+            }
+
+            Interlocked.Increment(ref _udpRedirected);
+            return PacketAction.Rewritten;
+        }
+
         _statistics.CountBlocked();
         return PacketAction.Drop;
     }
@@ -832,6 +935,14 @@ public sealed class DivertPipeline : IAsyncDisposable
         _traceThread = null;
 
         _udpPortOwners.Clear();
+        _udpOrigins.Clear();
+
+        if (_udpRelay is { } relay)
+        {
+            _udpRelay = null;
+            relay.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        }
+
         _nat.Clear();
 
         SplitLaneLog.Info(LogCategory, "divert stopped");

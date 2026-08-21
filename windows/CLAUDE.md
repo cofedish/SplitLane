@@ -79,6 +79,12 @@ and the packet path is a NAT-table lookup keyed on the source port. See `docs/NE
   signature is checked before the document is parsed, the installer is hashed against it, and the
   version and URL are read from the signed document only. `ReleaseKey.PublicKeySpki` changes with an
   ADR, never otherwise.
+- **A selected application's UDP is relayed, never forwarded** (ADR W-0012). It goes through a
+  SOCKS5 UDP association over a loopback lane, or it is dropped. The lane shape is not a preference:
+  relaying in the engine and injecting the answer as an inbound packet produces something WinDivert
+  accepts and Windows Firewall then discards, because the outbound datagram never left and there is
+  no state for the conversation. Counters said sent, returned and injected, with no failures, and
+  the application sat waiting.
 - Warnings are errors, project-wide.
 
 ## Commands

@@ -72,6 +72,7 @@ public sealed class RuleSnapshot
         Version = configuration.Version;
         IsRoutingEnabled = configuration.IsRoutingEnabled;
         LogsDirectFlows = configuration.LogsDirectFlows;
+        ProxiesUdp = configuration.ProxiesUdp;
     }
 
     /// <summary>The upstream the PROXY lane points at for this generation.</summary>
@@ -85,6 +86,9 @@ public sealed class RuleSnapshot
 
     /// <summary>Whether DIRECT decisions should be logged individually.</summary>
     public bool LogsDirectFlows { get; }
+
+    /// <summary>Whether a selected application's UDP is relayed rather than refused.</summary>
+    public bool ProxiesUdp { get; }
 
     /// <summary>An engine with no rules at all. Every flow goes DIRECT.</summary>
     public static readonly RuleSnapshot Empty = new(RuntimeConfiguration.Empty);
@@ -238,10 +242,15 @@ public sealed class RuleEngine
                 return new RouteDecision(RouteAction.Block, reason, ruleKey, path);
 
             case RouteAction.Proxy:
-                // A selected app's UDP is refused, not passed through. Returning DIRECT here would
-                // be the silent QUIC bypass the whole design exists to prevent; the app sees the
-                // failure and falls back to TCP, which is proxied correctly.
-                if (flow.Protocol == FlowProtocol.Udp)
+                // A selected app's UDP goes through the proxy when the proxy will carry it, and is
+                // refused when it will not. What it never does is go out unproxied: returning DIRECT
+                // here would be the silent bypass the whole design exists to prevent.
+                //
+                // Refusing used to be the only answer, on the reasoning that QUIC fails closed and
+                // falls back to TCP. True for QUIC, and no help at all to anything with no TCP path -
+                // Discord voice waits on "Connecting to RTC" forever, because there is no second way
+                // for it to try.
+                if (flow.Protocol == FlowProtocol.Udp && !Snapshot.ProxiesUdp)
                 {
                     return new RouteDecision(
                         RouteAction.Block, RouteReasonKind.UdpNotSupported, ruleKey, path);

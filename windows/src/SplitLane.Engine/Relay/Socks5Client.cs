@@ -42,7 +42,8 @@ public static class Socks5Client
         Socks5Address destination,
         ushort destinationPort,
         Socks5Credential? credential,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Socks5Command command = Socks5Command.Connect)
     {
         ArgumentNullException.ThrowIfNull(proxy);
 
@@ -62,7 +63,7 @@ public static class Socks5Client
             await socket.ConnectAsync(proxy.Endpoint.Host, proxy.Endpoint.Port, timeout.Token)
                 .ConfigureAwait(false);
 
-            var negotiator = new Socks5Negotiator(destination, destinationPort, credential);
+            var negotiator = new Socks5Negotiator(destination, destinationPort, credential, command);
             var step = negotiator.Start();
             var buffer = new byte[HandshakeBufferSize];
 

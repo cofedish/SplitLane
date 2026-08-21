@@ -168,6 +168,9 @@ public sealed class EngineRuntime : IAsyncDisposable
                 {
                     UseLoopbackRedirect = _options.UseLoopbackRedirect,
                     TraceRedirects = _options.TraceRedirects,
+                    ProxiesUdp = _configuration.ProxiesUdp,
+                    Proxy = () => _configuration.Proxy,
+                    Credential = () => _credential,
                 };
 
                 _pipeline.Start(port);

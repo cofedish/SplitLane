@@ -78,6 +78,24 @@ public sealed record RuntimeConfiguration
     public bool LogsDirectFlows { get; init; }
 
     /// <summary>
+    /// Whether a selected application's UDP is relayed through the proxy rather than refused.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// On by default, because the alternative breaks things people notice. Refusing UDP was chosen
+    /// so that QUIC would fail closed and fall back to TCP, which works - and does nothing for
+    /// anything with no TCP path at all. Discord voice is the plain example: it sits on "Connecting
+    /// to RTC" forever, because there is no second way for it to try.
+    /// </para>
+    /// <para>
+    /// Turning this off returns to refusing, which is the safe behaviour and never the leaky one.
+    /// Neither setting sends a selected application's datagrams out unproxied: a proxy that will not
+    /// relay them means they are dropped, exactly as before.
+    /// </para>
+    /// </remarks>
+    public bool ProxiesUdp { get; init; } = true;
+
+    /// <summary>
     /// Local TCP port the redirector listens on, or 0 to pick an ephemeral port at start.
     /// </summary>
     /// <remarks>

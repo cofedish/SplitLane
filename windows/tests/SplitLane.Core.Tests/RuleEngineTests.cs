@@ -210,17 +210,51 @@ public sealed class RuleEngineTests
         Assert.Equal(RouteAction.Direct, engine.Decide(new FlowDescriptor(0, "", "1.2.3.4", 443, FlowProtocol.Tcp)).Action);
     }
 
-    // ---- UDP fails closed ----------------------------------------------------------------
+    // ---- UDP goes through the proxy, or nowhere -------------------------------------------
 
     [Fact]
-    public void SelectedApplicationUdpIsBlockedNotPassedThrough()
+    public void SelectedApplicationUdpIsProxied()
     {
+        // It used to be refused, on the reasoning that QUIC fails closed and falls back to TCP.
+        // True for QUIC, and no help to anything with no TCP path: Discord voice sits on
+        // "Connecting to RTC" forever, because there is no second way for it to try.
         var engine = EngineWith(new AppRule { Identity = Identity(CodexPath) });
+
+        Assert.Equal(RouteAction.Proxy, engine.Decide(Flow(CodexPath, protocol: FlowProtocol.Udp)).Action);
+    }
+
+    [Fact]
+    public void SelectedApplicationUdpIsRefusedWhenProxyingItIsTurnedOff()
+    {
+        var engine = new RuleEngine(new RuntimeConfiguration
+        {
+            Rules = [new AppRule { Identity = Identity(CodexPath) }],
+            ProxiesUdp = false,
+        });
 
         var decision = engine.Decide(Flow(CodexPath, protocol: FlowProtocol.Udp));
 
         Assert.Equal(RouteAction.Block, decision.Action);
         Assert.Equal(RouteReasonKind.UdpNotSupported, decision.Reason);
+    }
+
+    [Fact]
+    public void SelectedApplicationUdpIsNeverPassedThroughEitherWay()
+    {
+        // The promise that does not change with the setting. Whatever else happens to a selected
+        // application's datagrams, they do not leave this machine from the user's own address.
+        foreach (var proxiesUdp in new[] { true, false })
+        {
+            var engine = new RuleEngine(new RuntimeConfiguration
+            {
+                Rules = [new AppRule { Identity = Identity(CodexPath) }],
+                ProxiesUdp = proxiesUdp,
+            });
+
+            Assert.NotEqual(
+                RouteAction.Direct,
+                engine.Decide(Flow(CodexPath, protocol: FlowProtocol.Udp)).Action);
+        }
     }
 
     [Fact]
