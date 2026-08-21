@@ -37,7 +37,7 @@ and the packet path is a NAT-table lookup keyed on the source port. See `docs/NE
 
 - Routing keys on the **normalised image path** (ADR W-0002). Never on process name.
 - Family matching **climbs out of a versioned directory**. An application selected in
-  `Discordpp-1.0.9250` must still be routed from `Discordpp-1.0.9254`, or every self-update
+  `Discord\app-1.0.9250` must still be routed from `Discord\app-1.0.9254`, or every self-update
   silently drops it back to DIRECT - which is what happened, in front of a user, to Discord. The
   detection is narrow on purpose (`app-1.2.3` and `1.2.3`, nothing else): every level climbed widens
   what a family rule captures.
