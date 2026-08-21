@@ -15,6 +15,7 @@ public sealed class RuleSnapshot
 {
     private readonly Dictionary<string, AppRule> _exactRules;
     private readonly Dictionary<string, AppRule> _familyRules;
+    private readonly Dictionary<string, AppRule> _packageRules;
 
     /// <summary>Builds a snapshot from a configuration.</summary>
     public RuleSnapshot(RuntimeConfiguration configuration)
@@ -23,6 +24,7 @@ public sealed class RuleSnapshot
 
         _exactRules = new Dictionary<string, AppRule>(ExecutablePath.Comparer);
         _familyRules = new Dictionary<string, AppRule>(ExecutablePath.Comparer);
+        _packageRules = new Dictionary<string, AppRule>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var rule in configuration.Rules)
         {
@@ -41,6 +43,14 @@ public sealed class RuleSnapshot
             }
 
             _exactRules[key] = rule;
+
+            // Packaged applications are keyed on what survives their updates rather than on the
+            // path they happened to be installed at when the rule was made.
+            if (rule.UsesPackageMatching)
+            {
+                _packageRules[rule.Identity.PackageFamily] = rule;
+                continue;
+            }
 
             if (!rule.UsesFamilyMatching)
             {
@@ -85,6 +95,9 @@ public sealed class RuleSnapshot
     /// <summary>Number of rules participating in family matching. Diagnostic only.</summary>
     public int FamilyRuleCount => _familyRules.Count;
 
+    /// <summary>How many rules match a packaged application across its versions.</summary>
+    public int PackageRuleCount => _packageRules.Count;
+
     /// <summary>
     /// Finds the most specific rule matching an executable path.
     /// </summary>
@@ -107,6 +120,20 @@ public sealed class RuleSnapshot
             rule = exact;
             isExact = true;
             return true;
+        }
+
+        // Before the ancestor walk: a packaged application's ancestors are WindowsApps and above,
+        // which no rule may ever be rooted at, so walking them for it would always come up empty.
+        if (_packageRules.Count > 0)
+        {
+            var family = PackagePath.Family(executablePath);
+
+            if (family.Length > 0 && _packageRules.TryGetValue(family, out var packaged))
+            {
+                rule = packaged;
+                isExact = false;
+                return true;
+            }
         }
 
         if (_familyRules.Count == 0)

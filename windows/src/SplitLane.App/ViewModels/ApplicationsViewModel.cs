@@ -238,9 +238,17 @@ public sealed class ApplicationsViewModel : ObservableObject
             return;
         }
 
-        // Family matching is the default only where it is safe. For a program installed in a shared
-        // directory it would mean routing every unrelated binary beside it (ADR W-0003).
-        var mode = identity.SupportsFamilyMatching ? MatchMode.ExecutableFamily : MatchMode.Exact;
+        // Broad matching is the default wherever it is both possible and safe.
+        //
+        // Packaged applications are checked first, and not as a special case: their install
+        // directory carries a version, so an exact rule on one is guaranteed to stop matching at
+        // the next update, and family matching cannot save it because the directory above is
+        // shared with every other packaged application (ADR W-0003).
+        var mode = identity.SupportsPackageMatching
+            ? MatchMode.PackageFamily
+            : identity.SupportsFamilyMatching
+                ? MatchMode.ExecutableFamily
+                : MatchMode.Exact;
 
         Rules.Add(new AppRuleViewModel(
             new AppRule { Identity = identity, Action = RouteAction.Proxy, MatchMode = mode },
@@ -249,7 +257,13 @@ public sealed class ApplicationsViewModel : ObservableObject
         _main.MarkDirty();
         RaiseCounts();
 
-        if (identity.IsPackaged)
+        if (mode == MatchMode.PackageFamily)
+        {
+            _main.SetBanner(
+                $"{identity.DisplayName} added. It is a packaged app, so it is matched by package " +
+                "rather than by path — the rule survives its updates.");
+        }
+        else if (identity.IsPackaged)
         {
             _main.SetBanner(
                 $"{identity.DisplayName} added. It is a packaged app, so its install path contains a " +

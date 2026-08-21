@@ -30,6 +30,24 @@ public enum MatchMode
     /// </para>
     /// </remarks>
     ExecutableFamily = 1,
+
+    /// <summary>
+    /// Match every version of this packaged application.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// For applications installed from the Store, and only for those. Their install directory
+    /// carries a version, so an exact rule stops matching the moment the application updates - and
+    /// family matching cannot help, because the directory above is <c>WindowsApps</c>, shared with
+    /// every other packaged application on the machine.
+    /// </para>
+    /// <para>
+    /// This matches on the package family name instead: the package's name and publisher hash, which
+    /// are the same across every version. It is no broader than an exact rule in what it covers -
+    /// one application, one publisher - and unlike an exact rule it survives an update.
+    /// </para>
+    /// </remarks>
+    PackageFamily = 2,
 }
 
 /// <summary>
@@ -85,4 +103,25 @@ public sealed record AppRule
     [JsonIgnore]
     public bool UsesFamilyMatching =>
         MatchMode == MatchMode.ExecutableFamily && Identity.SupportsFamilyMatching;
+
+    /// <summary>Whether package matching is both requested and possible.</summary>
+    /// <remarks>
+    /// <para>
+    /// Asked of the identity rather than assumed from the mode, so a configuration written by hand,
+    /// or by an older build, cannot ask for package matching on a path that has no package in it.
+    /// </para>
+    /// <para>
+    /// <see cref="MatchMode.ExecutableFamily"/> counts too, for a packaged application. It means the
+    /// same thing the user meant when they asked for it - cover the rest of this application, not
+    /// only the file I picked - and for a packaged application the install directory cannot deliver
+    /// that: it is shared with every other packaged application, so family matching is refused and
+    /// the rule quietly narrows to the one version installed at the time. Reading the request as the
+    /// one mechanism that can honour it also means rules written before this existed start working
+    /// rather than waiting to be re-made.
+    /// </para>
+    /// </remarks>
+    [JsonIgnore]
+    public bool UsesPackageMatching =>
+        MatchMode is MatchMode.PackageFamily or MatchMode.ExecutableFamily &&
+        Identity.SupportsPackageMatching;
 }

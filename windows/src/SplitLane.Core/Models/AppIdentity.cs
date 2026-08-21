@@ -92,6 +92,22 @@ public sealed record AppIdentity
     /// when the application is not packaged, or when the path has no versioned segment.
     /// </para>
     /// </remarks>
+    /// <summary>
+    /// The part of a packaged application's path that survives its updates, or empty.
+    /// </summary>
+    /// <remarks>
+    /// A packaged application's install directory carries its version, so the path this identity was
+    /// captured from is only true until the next update. The package family name - its name and
+    /// publisher hash, with the version discarded from between them - is true for as long as the
+    /// application is installed at all. See <see cref="Rules.PackagePath"/>.
+    /// </remarks>
+    [JsonIgnore]
+    public string PackageFamily => Rules.PackagePath.Family(ExecutablePath);
+
+    /// <summary>Whether this application can be matched by package family rather than by path.</summary>
+    [JsonIgnore]
+    public bool SupportsPackageMatching => PackageFamily.Length > 0;
+
     [JsonIgnore]
     public string? VersionedSegment
     {

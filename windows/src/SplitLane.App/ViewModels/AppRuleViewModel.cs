@@ -94,8 +94,25 @@ public sealed class AppRuleViewModel : ObservableObject
     /// </remarks>
     public bool HasStoppedMatching => ExecutableIsMissing && !StillMatchesByFamily;
 
+    /// <summary>
+    /// Whether this rule is matched by package family, and so survives the application's updates.
+    /// </summary>
+    /// <remarks>
+    /// Asked of the rule itself rather than re-derived from the mode. The engine decides this by
+    /// calling <see cref="AppRule.UsesPackageMatching"/>; a second copy of the reasoning here could
+    /// disagree with it, and the visible form of that disagreement is a warning telling somebody to
+    /// fix a rule that is already working - which is exactly what happened.
+    /// </remarks>
+    public bool MatchesByPackage => ToRule().UsesPackageMatching;
+
     /// <summary>Whether this rule needs the user's attention.</summary>
-    public bool HasWarning => HasStoppedMatching || Identity.IsPackaged;
+    /// <remarks>
+    /// A packaged application used to warn unconditionally, because an exact rule on one was
+    /// guaranteed to stop matching at its next update. Matched by package family it survives them,
+    /// so there is nothing left to warn about - and a warning that stays after its cause is fixed
+    /// teaches people to ignore warnings.
+    /// </remarks>
+    public bool HasWarning => HasStoppedMatching || (Identity.IsPackaged && !MatchesByPackage);
 
     /// <summary>
     /// What is wrong, in the order that matters.
@@ -117,6 +134,14 @@ public sealed class AppRuleViewModel : ObservableObject
                     : "This executable is no longer on disk, so the rule matches nothing and its " +
                       "traffic is going DIRECT.";
             }
+
+            if (Identity.SupportsPackageMatching)
+            {
+                return "Packaged app: the path contains a version, so this rule matches only the " +
+                       "version installed now. Turn on Include folder to match it by package " +
+                       "instead, which survives its updates.";
+            }
+
 
             return Identity.VersionedSegment is { } segment
                 ? $"Packaged app: the path contains a version ({segment}), so it will change on the " +
@@ -149,6 +174,9 @@ public sealed class AppRuleViewModel : ObservableObject
         {
             if (Set(ref _matchMode, value))
             {
+                Raise(nameof(MatchesByPackage));
+                Raise(nameof(HasWarning));
+                Raise(nameof(WarningText));
                 Raise(nameof(MatchSummary));
                 _changed();
             }
@@ -170,19 +198,29 @@ public sealed class AppRuleViewModel : ObservableObject
         }
     }
 
-    /// <summary>Whether this application can use family matching at all.</summary>
+    /// <summary>
+    /// Whether the helpers control can be turned on at all.
+    /// </summary>
     /// <remarks>
-    /// False for anything installed in a shared directory. The control is disabled rather than
-    /// hidden, with the reason in its tooltip, because "why can I not turn this on" is a question
-    /// worth answering in place (ADR W-0003).
+    /// Two different mechanisms sit behind one checkbox, because to the person using it they are one
+    /// idea: cover the rest of this application, not only the file I picked. An ordinary application
+    /// gets its install directory; a packaged one gets its package family, since its directory is
+    /// shared with every other packaged application on the machine. False only for an application
+    /// that can have neither - one installed loose in a shared folder (ADR W-0003) - and the control
+    /// is disabled rather than hidden, with the reason in its tooltip.
     /// </remarks>
-    public bool SupportsFamilyMatching => Identity.SupportsFamilyMatching;
+    public bool SupportsFamilyMatching =>
+        Identity.SupportsFamilyMatching || Identity.SupportsPackageMatching;
 
     /// <summary>Explains the family-matching control, whether or not it is available.</summary>
-    public string MatchTooltip => SupportsFamilyMatching
-        ? $"Also route anything else installed under {Identity.FamilyRoot}."
-        : $"{Identity.FamilyRoot} is shared with unrelated programs, so family matching is not " +
-          "available for this application — it would put every program in that folder into the proxy lane.";
+    public string MatchTooltip => Identity.SupportsPackageMatching
+        ? "Also route this application's other processes, and keep routing it after it updates. " +
+          "A packaged application installs each version in a new folder, so matching the folder " +
+          "alone would stop working at the next update."
+        : SupportsFamilyMatching
+            ? $"Also route anything else installed under {Identity.FamilyRoot}."
+            : $"{Identity.FamilyRoot} is shared with unrelated programs, so family matching is not " +
+              "available for this application — it would put every program in that folder into the proxy lane.";
 
     /// <summary>The word that says which lane this is, which is the thing to read.</summary>
     public string LaneLabel => !IsEnabled ? "OFF" : Action switch
@@ -196,15 +234,25 @@ public sealed class AppRuleViewModel : ObservableObject
     public bool IsProxied => IsEnabled && Action == RouteAction.Proxy;
 
     /// <summary>One line describing what the rule covers.</summary>
-    public string MatchSummary => MatchMode == MatchMode.ExecutableFamily && SupportsFamilyMatching
-        ? $"This executable and everything under {ExecutablePathHelper.FamilyRootDisplay(Identity)}"
-        : "This executable only";
+    public string MatchSummary =>
+        MatchesByPackage ? "Every version of this packaged application"
+        : MatchMode == MatchMode.ExecutableFamily && Identity.SupportsFamilyMatching
+            ? $"This executable and everything under {ExecutablePathHelper.FamilyRootDisplay(Identity)}"
+            : "This executable only";
 
-    /// <summary>Whether family matching is on.</summary>
+    /// <summary>Whether the rule covers more than the one executable it names.</summary>
+    /// <remarks>
+    /// Which mechanism that means depends on the application: a packaged one is matched by package
+    /// family, everything else by install directory. The checkbox does not ask the user to know the
+    /// difference, and picking the wrong one for them would be the difference between a rule that
+    /// survives an update and one that does not.
+    /// </remarks>
     public bool IncludesFamily
     {
-        get => MatchMode == MatchMode.ExecutableFamily;
-        set => MatchMode = value ? MatchMode.ExecutableFamily : MatchMode.Exact;
+        get => MatchMode is MatchMode.ExecutableFamily or MatchMode.PackageFamily;
+        set => MatchMode = value
+            ? Identity.SupportsPackageMatching ? MatchMode.PackageFamily : MatchMode.ExecutableFamily
+            : MatchMode.Exact;
     }
 
     /// <summary>Builds the stored form.</summary>

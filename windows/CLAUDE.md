@@ -41,6 +41,11 @@ and the packet path is a NAT-table lookup keyed on the source port. See `docs/NE
   silently drops it back to DIRECT - which is what happened, in front of a user, to Discord. The
   detection is narrow on purpose (`app-1.2.3` and `1.2.3`, nothing else): every level climbed widens
   what a family rule captures.
+- **Packaged applications match by package family, never by path** (ADR W-0010). Their install
+  directory carries a version, and the directory above it is `WindowsApps`, shared with every
+  packaged application on the machine - so an exact rule dies at the next update and a family rule
+  is refused. The package family name, publisher name plus publisher hash, is stable across versions
+  and identifies nothing else.
 - Family matching cuts on the **path separator**, and is **refused for shared directories** — a
   family rule on `C:\Windows\System32` would proxy the operating system (ADR W-0003). The check
   appears in three places on purpose; do not remove any of them.
