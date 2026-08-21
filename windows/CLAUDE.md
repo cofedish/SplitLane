@@ -64,6 +64,11 @@ and the packet path is a NAT-table lookup keyed on the source port. See `docs/NE
 - One inset per control. `Padding` on a TextBox is applied by the control *and* by whatever the
   template does with it, and applying it in both places put the caret a padding-width right of the
   placeholder it was replacing.
+- The window has **no system menu**, cleared in code. DWM paints caption buttons for any window
+  that has one, into the client area once the frame is extended - which this window extends, because
+  that is where the backdrop is composited. `UseAeroCaptionButtons="False"` stops WPF hit-testing
+  them, not Windows drawing them, and the window carried two sets of buttons until this was found.
+  `WindowStyle="None"` also removes them and takes the frame's maximise behaviour with it.
 - Warnings are errors, project-wide.
 
 ## Commands

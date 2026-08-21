@@ -15,6 +15,13 @@
         FontFamily="{StaticResource UiFont}">
 
     <!--
+        The system caption's buttons are removed in code, not here; see WindowEffects.
+
+        DWM paints them over the client area whether or not WPF hit-tests them, so the window showed
+        two sets: the system's along the very top and this window's seven points below. Confirmed by
+        hiding this window's own strip and finding a full set still there. UseAeroCaptionButtons
+        governs hit testing only - it does not stop them being drawn.
+
         Custom chrome. CaptionHeight carves out a drag strip along the top; everything interactive up
         there opts back out with IsHitTestVisibleInChrome. GlassFrameThickness of -1 extends the
         composition frame across the whole client area, which is what lets the Mica backdrop render

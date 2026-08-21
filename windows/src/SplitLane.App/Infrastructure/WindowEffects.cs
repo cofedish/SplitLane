@@ -70,6 +70,46 @@ public static class WindowEffects
         }
     }
 
+    /// <summary>
+    /// Stops Windows drawing a second set of window buttons over this window's own.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// DWM draws the caption buttons for any window that has a system menu, and it draws them into
+    /// the client area once the frame is extended - which this window does, because that is what the
+    /// backdrop is composited into. WPF's <c>UseAeroCaptionButtons="False"</c> only stops WPF hit
+    /// testing them; they are still painted. The window therefore carried two minimise, maximise and
+    /// close buttons: the system's along the very top and its own seven points below.
+    /// </para>
+    /// <para>
+    /// Clearing <c>WS_SYSMENU</c> removes them and nothing else this window relies on, since it
+    /// draws and handles all three itself. The obvious alternative, <c>WindowStyle="None"</c>,
+    /// removes them too and takes the frame's maximise behaviour with it - measured covering the
+    /// taskbar by seventy-six pixels.
+    /// </para>
+    /// <para>
+    /// The cost is the window menu on Alt+Space and on a right-click of the title bar. Everything it
+    /// offers - move, size, minimise, maximise, close - this window offers by other means.
+    /// </para>
+    /// </remarks>
+    private static void HideSystemCaptionButtons(nint handle)
+    {
+        var style = GetWindowLong(handle, GwlStyle);
+        if (style != 0)
+        {
+            SetWindowLong(handle, GwlStyle, style & ~WsSysMenu);
+        }
+    }
+
+    private const int GwlStyle = -16;
+    private const int WsSysMenu = 0x00080000;
+
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongW")]
+    private static extern int GetWindowLong(nint window, int index);
+
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongW")]
+    private static extern int SetWindowLong(nint window, int index, int value);
+
     private static void SetCaption(nint handle, bool dark)
     {
         var enabled = dark ? 1 : 0;
@@ -110,6 +150,7 @@ public static class WindowEffects
         }
 
         SetCaption(handle, dark);
+        HideSystemCaptionButtons(handle);
 
         var corner = CornerRound;
         DwmSetWindowAttribute(handle, WindowCornerPreference, ref corner, sizeof(int));
