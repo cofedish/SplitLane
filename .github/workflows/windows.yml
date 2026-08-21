@@ -182,6 +182,8 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write
+    env:
+      UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
 
     steps:
       - uses: actions/checkout@v7
@@ -192,6 +194,50 @@ jobs:
           pattern: splitlane-windows-*
           merge-multiple: true
           path: release
+
+      # The update manifest, and the signature installed engines check it against.
+      #
+      # The engine runs as LocalSystem, so a manifest it accepts is code running with full privileges
+      # on somebody's machine. It accepts one only if this signature verifies against a public key
+      # compiled into the build, which is why the private half lives here as a secret and nowhere
+      # else - not in the repository, not in an artifact, not in a log.
+      #
+      # A release published without the secret gets no manifest rather than an unsigned one. An
+      # unsigned manifest is not a lesser update; it is one that nothing will install, and producing
+      # it quietly would look like a working release until somebody tried to upgrade.
+      - name: Sign the update manifest
+        if: ${{ env.UPDATE_SIGNING_KEY != '' }}
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        shell: pwsh
+        run: |
+          $version = '${{ github.ref_name }}' -replace '^v', ''
+          $msi = Get-ChildItem release -Filter '*.msi' | Select-Object -First 1
+          if (-not $msi) { throw 'No MSI in the release directory.' }
+
+          $manifest = [ordered]@{
+              version    = $version
+              url        = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/$($msi.Name)"
+              sha256     = (Get-FileHash $msi.FullName -Algorithm SHA256).Hash
+              releasedAt = (Get-Date).ToUniversalTime().ToString('o')
+              notes      = 'See the release notes for what changed.'
+          } | ConvertTo-Json -Compress
+
+          # Written as UTF-8 with no byte-order mark, and signed over exactly those bytes. The
+          # engine verifies the document as published, before parsing it, so a BOM added here would
+          # be a byte it never saw and every installation would refuse the release.
+          [IO.File]::WriteAllText("$PWD/release/update.json", $manifest, [Text.UTF8Encoding]::new($false))
+
+          $key = [Convert]::FromBase64String($env:UPDATE_SIGNING_KEY)
+          $ecdsa = [System.Security.Cryptography.ECDsa]::Create()
+          $ecdsa.ImportPkcs8PrivateKey($key, [ref]0)
+          $signature = $ecdsa.SignData(
+              [Text.Encoding]::UTF8.GetBytes($manifest),
+              [System.Security.Cryptography.HashAlgorithmName]::SHA256)
+          $ecdsa.Dispose()
+
+          [IO.File]::WriteAllText("$PWD/release/update.json.sig", [Convert]::ToBase64String($signature))
+          Write-Host "Signed update.json for $version"
 
       - name: Publish release
         uses: softprops/action-gh-release@v3

@@ -9,6 +9,8 @@ using SplitLane.Engine.Divert;
 using SplitLane.Engine.Flows;
 using SplitLane.Engine.Relay;
 
+using SplitLane.Engine.Update;
+
 namespace SplitLane.Engine.Runtime;
 
 /// <summary>How the engine was asked to run.</summary>
@@ -61,6 +63,7 @@ public sealed class EngineRuntime : IAsyncDisposable
     private readonly DnsObserver _dns = new();
     private readonly ProcessResolver _processes = new();
     private readonly EngineStatistics _statistics = new();
+    private readonly UpdateService _updates = new();
     private readonly SemaphoreSlim _lifecycle = new(1, 1);
 
     private volatile RuleEngine _engine = new(RuleSnapshot.Empty);
@@ -82,6 +85,9 @@ public sealed class EngineRuntime : IAsyncDisposable
 
     /// <summary>Statistics, shared with the relay and the divert threads.</summary>
     public EngineStatistics Statistics => _statistics;
+
+    /// <summary>Finds newer releases, and installs one when asked to.</summary>
+    public UpdateService Updates => _updates;
 
     /// <summary>The configuration currently in force.</summary>
     public RuntimeConfiguration Configuration => _configuration;
@@ -127,6 +133,10 @@ public sealed class EngineRuntime : IAsyncDisposable
     /// </summary>
     public async Task StartAsync()
     {
+        // Independent of whether the divert layer comes up. A machine that cannot load the driver is
+        // a machine that most wants the release which might fix that.
+        _updates.Start();
+
         await _lifecycle.WaitAsync().ConfigureAwait(false);
         try
         {
@@ -265,7 +275,14 @@ public sealed class EngineRuntime : IAsyncDisposable
             _listener?.Port ?? 0,
             _lastError,
             _startedAt,
-            _pipeline?.DriverVersion);
+            _pipeline?.DriverVersion) with
+        {
+            EngineVersion = UpdateService.CurrentVersion.ToString(),
+            UpdateState = _updates.State.ToString(),
+            UpdateVersion = _updates.Available?.Version,
+            UpdateNotes = _updates.Available?.Notes,
+            UpdateError = _updates.LastError,
+        };
     }
 
     /// <summary>
@@ -334,6 +351,7 @@ public sealed class EngineRuntime : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         await StopAsync().ConfigureAwait(false);
+        _updates.Dispose();
         _lifecycle.Dispose();
     }
 }

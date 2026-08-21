@@ -21,6 +21,9 @@ public sealed class SettingsViewModel : ObservableObject
     {
         _main = main ?? throw new ArgumentNullException(nameof(main));
 
+        CheckForUpdateCommand = new AsyncRelayCommand(CheckForUpdateAsync);
+        InstallUpdateCommand = new AsyncRelayCommand(InstallUpdateAsync);
+
         OpenConfigurationFolderCommand = new RelayCommand(() => Reveal(_main.Store.ConfigurationPath));
         OpenLogCommand = new RelayCommand(
             () => Reveal(_main.Store.EngineLogPath),
@@ -32,6 +35,42 @@ public sealed class SettingsViewModel : ObservableObject
 
     /// <summary>Shows the engine log in Explorer.</summary>
     public RelayCommand OpenLogCommand { get; }
+
+    /// <summary>Asks the engine to look for a newer release.</summary>
+    public AsyncRelayCommand CheckForUpdateCommand { get; }
+
+    /// <summary>Asks the engine to install the release it found.</summary>
+    public AsyncRelayCommand InstallUpdateCommand { get; }
+
+    /// <summary>What this installation is.</summary>
+    /// <remarks>
+    /// Read from the engine rather than from this assembly. The two are installed together and are
+    /// therefore the same version - but if they ever were not, the number that matters is the one
+    /// belonging to the half that routes traffic.
+    /// </remarks>
+    public string InstalledVersion => _main.Status?.EngineVersion is { Length: > 0 } version
+        ? version
+        : "unknown while the engine is not running";
+
+    /// <summary>Whether a verified release is waiting to be installed.</summary>
+    public bool UpdateAvailable =>
+        string.Equals(_main.Status?.UpdateState, "Available", StringComparison.Ordinal);
+
+    /// <summary>Whether the engine is in the middle of fetching or applying one.</summary>
+    public bool UpdateInProgress =>
+        _main.Status?.UpdateState is "Downloading" or "Installing";
+
+    /// <summary>One line about where updates stand.</summary>
+    public string UpdateSummary => _main.Status?.UpdateState switch
+    {
+        "Available" => $"Version {_main.Status?.UpdateVersion} is available. " +
+                       (_main.Status?.UpdateNotes ?? string.Empty),
+        "Downloading" => "Downloading the installer…",
+        "Installing" => "Installing. The engine restarts, so routing pauses for a few seconds.",
+        "UpToDate" => "This is the newest release.",
+        "Failed" => $"The last check did not finish: {_main.Status?.UpdateError}",
+        _ => "SplitLane checks once a day, and installs nothing without being asked.",
+    };
 
     /// <summary>
     /// Which look the application wears.
@@ -185,6 +224,46 @@ public sealed class SettingsViewModel : ObservableObject
         Raise(nameof(DriverStatus));
         Raise(nameof(DriverIsMissing));
         Raise(nameof(DriverIsHealthy));
+
+        // The daily check happens without anybody pressing anything, so the page has to hear about
+        // its result the same way it hears about everything else the engine reports.
+        RaiseUpdate();
+    }
+
+    private async Task CheckForUpdateAsync()
+    {
+        var reply = await _main.Engine.CheckForUpdateAsync().ConfigureAwait(true);
+
+        _main.SetBanner(reply.Succeeded
+            ? "Checked for updates."
+            : $"Could not check for updates: {reply.Message}");
+
+        // The result arrives with the next status poll, a second away, and every page already
+        // refreshes from that. Reaching for a private refresh here would be a second path to the
+        // same place.
+        RaiseUpdate();
+    }
+
+    private async Task InstallUpdateAsync()
+    {
+        // The engine restarts itself as part of this, so the reply is an acknowledgement that the
+        // installer started rather than that it finished. Saying otherwise would be a promise this
+        // side of the pipe cannot keep.
+        var reply = await _main.Engine.ApplyUpdateAsync().ConfigureAwait(true);
+
+        _main.SetBanner(reply.Succeeded
+            ? "Installing. SplitLane will reconnect to the engine when it comes back."
+            : $"The update could not be installed: {reply.Message}");
+
+        RaiseUpdate();
+    }
+
+    private void RaiseUpdate()
+    {
+        Raise(nameof(InstalledVersion));
+        Raise(nameof(UpdateAvailable));
+        Raise(nameof(UpdateInProgress));
+        Raise(nameof(UpdateSummary));
     }
 
     private static void Reveal(string path)

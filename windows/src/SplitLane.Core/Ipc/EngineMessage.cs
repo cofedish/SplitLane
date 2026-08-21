@@ -55,6 +55,22 @@ public enum EngineRequestKind
 
     /// <summary>Stop diverting, leaving the engine running and inert. Idempotent.</summary>
     StopRouting,
+
+    /// <summary>Ask the engine to look for a newer release now.</summary>
+    /// <remarks>
+    /// The engine looks on its own once a day; this is the button. Neither this nor
+    /// <see cref="ApplyUpdate"/> carries a version, a URL or a file name - what gets installed is
+    /// decided entirely by the signed manifest the engine fetched, so an unelevated caller cannot
+    /// name it. The vocabulary stays a closed enum for exactly this reason.
+    /// </remarks>
+    CheckForUpdate,
+
+    /// <summary>Install the release the engine has already found and verified.</summary>
+    /// <remarks>
+    /// Separate from checking because installing restarts the service and drops every relayed
+    /// connection. The engine finds updates; the person decides when to take one.
+    /// </remarks>
+    ApplyUpdate,
 }
 
 /// <summary>
@@ -191,6 +207,21 @@ public sealed record EngineStatus
 
     /// <summary>Version of the divert driver the engine is bound to, when known.</summary>
     public string? DriverVersion { get; init; }
+
+    /// <summary>Version of the engine itself, so the window can show what is actually running.</summary>
+    public string? EngineVersion { get; init; }
+
+    /// <summary>Where the last update check or install got to. Names an UpdateState.</summary>
+    public string? UpdateState { get; init; }
+
+    /// <summary>The release waiting to be installed, when there is one.</summary>
+    public string? UpdateVersion { get; init; }
+
+    /// <summary>A sentence about the waiting release, from its manifest.</summary>
+    public string? UpdateNotes { get; init; }
+
+    /// <summary>Why the last check or install failed, when it did.</summary>
+    public string? UpdateError { get; init; }
 
     /// <summary>How long the engine has been diverting.</summary>
     [JsonIgnore]

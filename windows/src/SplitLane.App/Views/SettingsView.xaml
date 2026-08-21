@@ -5,6 +5,42 @@
     <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,0,10,0">
         <StackPanel Margin="0,0,0,28" MaxWidth="820" HorizontalAlignment="Left">
 
+            <!-- ==== Updates ================================================================ -->
+
+            <Border Style="{StaticResource Card}">
+                <StackPanel>
+                    <TextBlock Text="Updates" Style="{StaticResource CardTitle}" />
+
+                    <Grid Margin="0,14,0,0">
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource BodyText}"
+                                       AutomationProperties.AutomationId="InstalledVersion"
+                                       Text="{Binding InstalledVersion, StringFormat=Installed version {0}}" />
+                            <TextBlock Style="{StaticResource BodyText}" Margin="0,6,0,0"
+                                       AutomationProperties.AutomationId="UpdateSummary"
+                                       Text="{Binding UpdateSummary}" />
+                        </StackPanel>
+
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top">
+                            <Button Content="Check now" Style="{StaticResource QuietButton}"
+                                    AutomationProperties.AutomationId="CheckForUpdateButton"
+                                    Command="{Binding CheckForUpdateCommand}" />
+                            <Button Content="Install" Style="{StaticResource PrimaryButton}" Margin="10,0,0,0"
+                                    AutomationProperties.AutomationId="InstallUpdateButton"
+                                    Command="{Binding InstallUpdateCommand}"
+                                    Visibility="{Binding UpdateAvailable, Converter={StaticResource BoolToVisible}}" />
+                        </StackPanel>
+                    </Grid>
+
+                    <Border Background="{DynamicResource SurfaceRaisedBrush}" CornerRadius="7"
+                            Padding="14,12" Margin="0,16,0,0"
+                            Visibility="{Binding UpdateAvailable, Converter={StaticResource BoolToVisible}}">
+                        <TextBlock Style="{StaticResource BodyText}"
+                                   Text="Installing restarts the engine, so routing pauses for a few seconds and open connections are dropped. SplitLane never installs an update on its own." />
+                    </Border>
+                </StackPanel>
+            </Border>
+
             <!-- ==== Appearance ============================================================= -->
 
             <Border Style="{StaticResource Card}">

@@ -50,7 +50,7 @@ and the packet path is a NAT-table lookup keyed on the source port. See `docs/NE
   family rule on `C:\Windows\System32` would proxy the operating system (ADR W-0003). The check
   appears in three places on purpose; do not remove any of them.
 - The **engine is the only elevated component**, and runs as `LocalSystem`. Everything the app can
-  ask it to do is `EngineRequestKind`, nine members, none of which names a file, a command or a
+  ask it to do is `EngineRequestKind`, eleven members, none of which names a file, a command or a
   library. The control channel's ACL was built for this: LocalSystem full control, interactive user
   read and write, so neither side gains anything from the other.
 - The **driver is in the package, and so is its licence** (ADR W-0009). `build-installer.ps1`
@@ -74,6 +74,11 @@ and the packet path is a NAT-table lookup keyed on the source port. See `docs/NE
   that is where the backdrop is composited. `UseAeroCaptionButtons="False"` stops WPF hit-testing
   them, not Windows drawing them, and the window carried two sets of buttons until this was found.
   `WindowStyle="None"` also removes them and takes the frame's maximise behaviour with it.
+- **Nothing is installed that was not signed by the release key** (ADR W-0011). The engine is
+  `LocalSystem`, so an update it accepts is code running with full privileges: the manifest's
+  signature is checked before the document is parsed, the installer is hashed against it, and the
+  version and URL are read from the signed document only. `ReleaseKey.PublicKeySpki` changes with an
+  ADR, never otherwise.
 - Warnings are errors, project-wide.
 
 ## Commands

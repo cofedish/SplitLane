@@ -78,6 +78,18 @@ public sealed class EngineClient
     public Task<EngineReply> StopRoutingAsync(CancellationToken cancellationToken = default)
         => SendAsync(new EngineRequest(EngineRequestKind.StopRouting), cancellationToken);
 
+    /// <summary>Asks the engine to look for a newer release now.</summary>
+    public Task<EngineReply> CheckForUpdateAsync(CancellationToken cancellationToken = default)
+        => SendAsync(new EngineRequest(EngineRequestKind.CheckForUpdate), cancellationToken);
+
+    /// <summary>Asks the engine to install the release it has already verified.</summary>
+    /// <remarks>
+    /// Carries nothing. The window cannot name what gets installed - it can only say when - and that
+    /// is deliberate: this request crosses from an unelevated process into one running as SYSTEM.
+    /// </remarks>
+    public Task<EngineReply> ApplyUpdateAsync(CancellationToken cancellationToken = default)
+        => SendAsync(new EngineRequest(EngineRequestKind.ApplyUpdate), cancellationToken);
+
     private static async Task<EngineReply> SendAsync(EngineRequest request, CancellationToken cancellationToken)
     {
         try

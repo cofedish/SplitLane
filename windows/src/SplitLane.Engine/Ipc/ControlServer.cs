@@ -214,6 +214,18 @@ public sealed class ControlServer : IAsyncDisposable
                 await _runtime.StopAsync().ConfigureAwait(false);
                 return EngineResponse.Ok;
 
+            case EngineRequestKind.CheckForUpdate:
+                await _runtime.Updates.CheckAsync().ConfigureAwait(false);
+                return EngineResponse.Ok;
+
+            case EngineRequestKind.ApplyUpdate:
+                // Nothing from the request reaches this. What gets installed was decided by a
+                // manifest the engine fetched and verified against the release key; the caller is
+                // only choosing when.
+                return await _runtime.Updates.ApplyAsync().ConfigureAwait(false)
+                    ? EngineResponse.Ok
+                    : EngineResponse.Failed(_runtime.Updates.LastError ?? "the update could not be applied");
+
             default:
                 return EngineResponse.Failed($"Unsupported request {request.Kind}");
         }
