@@ -11,6 +11,10 @@ a running engine over the control channel.
 | | |
 |---|---|
 | `1-overview.png` | Engine live. State, master switch, counters, and what SplitLane will not do. |
+
+`1` and `3`-`6` are re-captured whenever the interface changes, so what the README shows is what
+the current build looks like rather than what an earlier one did. `2` is older than the rest.
+
 | `2-picker.png` | Adding an application from the running-process list. |
 | `3-applications.png` | A saved rule. The banner is the round-trip through the control channel. |
 | `4-proxy.png` | Upstream settings after a successful reachability test against a real SOCKS5 proxy. |

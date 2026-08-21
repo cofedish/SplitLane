@@ -28,6 +28,29 @@ This is the Windows counterpart of the macOS build in the repository root. It is
 design, not of the code: the routing model, the vocabulary and the guarantees are the same, and
 almost nothing underneath them is.
 
+## What it looks like
+
+![Overview](docs/screenshots/1-overview.png)
+
+The Overview page while routing: what is proxied, what went DIRECT, what was blocked, how much has
+been relayed, and which driver is loaded. Everything on it is read from the running engine.
+
+| | |
+|---|---|
+| ![Applications](docs/screenshots/3-applications.png) | ![Proxy](docs/screenshots/4-proxy.png) |
+| **Applications** — the proxy lane. Anything not listed here stays DIRECT. *Include folder* covers an application's helper processes, and follows it when it updates itself into a new directory. | **Proxy** — where the lane points, with a reachability test that actually connects. The password is encrypted for the machine and stored outside the configuration file. |
+| ![Activity](docs/screenshots/5-activity.png) | ![Settings](docs/screenshots/6-settings.png) |
+| **Activity** — connections SplitLane handled, with what each one moved and how long its handshake took. DIRECT decisions are counted but not listed: the engine sees every connection on the machine, and recording them all would make this a log of everything you do. | **Settings** — the divert layer's state, where things are stored, and a plain statement of how this differs from the macOS build. |
+
+![Light theme](docs/screenshots/8-light-theme.png)
+
+A light theme, chosen in Settings and applied as you choose it. *Follow Windows* is the default and
+keeps following it afterwards, not only at startup.
+
+Every one of these is the real application, driven through UI Automation by
+[`tools/uiprobe`](tools/uiprobe/) and captured from the screen. Nothing here is a mockup or a
+rendering, and the numbers in them are traffic that actually went through the proxy.
+
 ## What makes it different
 
 **Selected applications never silently fall back to DIRECT.** If the proxy is unreachable, the
