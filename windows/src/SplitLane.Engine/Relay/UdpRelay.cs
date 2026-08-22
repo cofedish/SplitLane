@@ -31,13 +31,6 @@ public sealed class UdpRelay : IAsyncDisposable
 {
     private const string LogCategory = "udp";
 
-    /// <summary>How many lanes may exist at once, across every application.</summary>
-    /// <remarks>
-    /// Each is a socket, and each application socket's lanes share one TCP connection to the proxy.
-    /// A bound stops a misbehaving application - or a scan through one - from exhausting either.
-    /// </remarks>
-    private const int MaxLanes = 512;
-
     /// <summary>How long a lane survives with nothing passing through it.</summary>
     private static readonly TimeSpan IdleTimeout = TimeSpan.FromMinutes(2);
 
@@ -45,6 +38,7 @@ public sealed class UdpRelay : IAsyncDisposable
     private readonly ConcurrentDictionary<ushort, UdpLane> _byLanePort = new();
     private readonly ConcurrentDictionary<ushort, Lazy<Task<UdpAssociation>>> _associations = new();
     private readonly CancellationTokenSource _stopping = new();
+    private readonly UdpLanePool _pool;
     private readonly Func<ProxyConfiguration> _proxy;
     private readonly Func<Socks5Credential?> _credential;
     private readonly Timer _sweeper;
@@ -54,10 +48,12 @@ public sealed class UdpRelay : IAsyncDisposable
     private long _refused;
 
     /// <summary>Builds a relay.</summary>
+    /// <param name="pool">The block of loopback ports the divert filter names.</param>
     /// <param name="proxy">Reads the upstream freshly, because configuration changes underneath.</param>
     /// <param name="credential">Reads the credential the same way.</param>
-    public UdpRelay(Func<ProxyConfiguration> proxy, Func<Socks5Credential?> credential)
+    public UdpRelay(UdpLanePool pool, Func<ProxyConfiguration> proxy, Func<Socks5Credential?> credential)
     {
+        _pool = pool ?? throw new ArgumentNullException(nameof(pool));
         _proxy = proxy ?? throw new ArgumentNullException(nameof(proxy));
         _credential = credential ?? throw new ArgumentNullException(nameof(credential));
         _sweeper = new Timer(_ => Sweep(), null, IdleTimeout, IdleTimeout);
@@ -99,17 +95,20 @@ public sealed class UdpRelay : IAsyncDisposable
             return existing.Port;
         }
 
-        if (_lanes.Count >= MaxLanes)
+        var reserved = _pool.TryAcquire();
+
+        if (reserved is null)
         {
+            // The block is full. Refused, which means dropped - never forwarded unproxied.
             Interlocked.Increment(ref _refused);
             return null;
         }
 
-        var lane = new UdpLane(applicationPort, remote);
+        var lane = new UdpLane(reserved.Value.Socket, reserved.Value.Port, applicationPort, remote);
 
         if (!_lanes.TryAdd((applicationPort, remote), lane))
         {
-            lane.Dispose();
+            _pool.Release(lane.Port);
             return _lanes.TryGetValue((applicationPort, remote), out var raced) ? raced.Port : null;
         }
 
@@ -147,7 +146,7 @@ public sealed class UdpRelay : IAsyncDisposable
             if (_lanes.TryRemove(key, out _))
             {
                 _byLanePort.TryRemove(lane.Port, out _);
-                lane.Dispose();
+                _pool.Release(lane.Port);
             }
         }
 
@@ -275,7 +274,7 @@ public sealed class UdpRelay : IAsyncDisposable
             }
 
             _byLanePort.TryRemove(lane.Port, out _);
-            lane.Dispose();
+            _pool.Release(lane.Port);
 
             // The association goes when its last lane does; it holds a connection at the proxy.
             if (!_lanes.Keys.Any(k => k.Port == key.Port) &&
@@ -308,7 +307,7 @@ public sealed class UdpRelay : IAsyncDisposable
         {
             _lanes.TryRemove(key, out _);
             _byLanePort.TryRemove(lane.Port, out _);
-            lane.Dispose();
+            _pool.Release(lane.Port);
         }
 
         foreach (var (port, association) in _associations)

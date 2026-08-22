@@ -27,23 +27,31 @@ namespace SplitLane.Engine.Relay;
 /// thing the packet layer can use to know which remote to attribute it to, so a socket talking to
 /// three hosts needs three lanes.
 /// </para>
+/// <para>
+/// The socket comes from a block reserved before the divert filter was built, so the filter names
+/// that block and nothing else. Capturing every loopback datagram on the machine instead - which is
+/// what an unreserved port forced - pulled ten thousand packets a second into user mode and broke
+/// the tunnel this machine's DNS runs through.
+/// </para>
 /// </remarks>
 public sealed class UdpLane : IDisposable
 {
     private readonly UdpClient _socket;
 
-    /// <summary>Opens a lane on loopback.</summary>
+    /// <summary>Takes a lane from the reserved block.</summary>
+    /// <param name="socket">A socket from the pool, already bound.</param>
+    /// <param name="port">The port it is bound to.</param>
     /// <param name="applicationPort">The application socket this stands in for.</param>
     /// <param name="remote">The remote endpoint it is talking to.</param>
-    public UdpLane(ushort applicationPort, IPEndPoint remote)
+    public UdpLane(UdpClient socket, ushort port, ushort applicationPort, IPEndPoint remote)
     {
+        ArgumentNullException.ThrowIfNull(socket);
         ArgumentNullException.ThrowIfNull(remote);
 
+        _socket = socket;
+        Port = port;
         ApplicationPort = applicationPort;
         Remote = remote;
-
-        _socket = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
-        Port = (ushort)((IPEndPoint)_socket.Client.LocalEndPoint!).Port;
     }
 
     /// <summary>The loopback port the application's datagrams are redirected to.</summary>
@@ -79,6 +87,15 @@ public sealed class UdpLane : IDisposable
             new IPEndPoint(IPAddress.Loopback, ApplicationPort)).AsTask();
     }
 
-    /// <inheritdoc />
-    public void Dispose() => _socket.Dispose();
+    /// <summary>
+    /// Gives the lane up.
+    /// </summary>
+    /// <remarks>
+    /// The socket belongs to the pool, which replaces it rather than handing the same one out again -
+    /// datagrams for this conversation may still be arriving, and a lane that inherited them would
+    /// give one application another's traffic.
+    /// </remarks>
+    public void Dispose()
+    {
+    }
 }

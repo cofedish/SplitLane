@@ -85,6 +85,11 @@ and the packet path is a NAT-table lookup keyed on the source port. See `docs/NE
   accepts and Windows Firewall then discards, because the outbound datagram never left and there is
   no state for the conversation. Counters said sent, returned and injected, with no failures, and
   the application sat waiting.
+- **The divert filter never names a whole class of traffic it does not need.** Capturing all outbound
+  loopback UDP - to catch the relay lanes' replies - pulled ten thousand packets a second of other
+  software's traffic through user mode on a machine whose DNS runs through a local tunnel. Lanes now
+  come from a block of ports reserved before the filter is built, and the filter names that block:
+  618,646 packets in a minute became 8,315.
 - Warnings are errors, project-wide.
 
 ## Commands

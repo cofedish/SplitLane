@@ -90,6 +90,7 @@ public sealed class DivertPipeline : IAsyncDisposable
     private readonly ConcurrentDictionary<ushort, UdpSocketDecision> _udpPortOwners = new();
     private readonly ConcurrentDictionary<ushort, IPAddress> _udpOrigins = new();
     private UdpRelay? _udpRelay;
+    private UdpLanePool? _lanePool;
 
     private DivertHandle? _socketHandle;
     private DivertHandle? _networkHandle;
@@ -192,17 +193,30 @@ public sealed class DivertPipeline : IAsyncDisposable
     /// failing closed matters more than throughput (ADR 0004).</item>
     /// </list>
     /// </remarks>
-    internal static string NetworkFilter(ushort listenerPort) =>
-        $"(outbound and tcp and not loopback) or " +
-        $"(outbound and tcp and loopback and tcp.SrcPort = {listenerPort}) or " +
-        $"(outbound and udp and not loopback) or " +
+    internal static string NetworkFilter(ushort listenerPort, UdpLanePool? lanes = null)
+    {
+        var filter =
+            $"(outbound and tcp and not loopback) or " +
+            $"(outbound and tcp and loopback and tcp.SrcPort = {listenerPort}) or " +
+            $"(outbound and udp and not loopback)";
 
-        // Loopback UDP, for the lanes' replies on their way back to the application. Every
-        // datagram between local sockets passes through here as a result, and the vast majority
-        // are somebody else's - they are recognised by lane port and forwarded untouched, which
-        // costs a dictionary lookup each. The alternative, naming the lane ports in the filter,
-        // would mean reopening the handle every time an application talks to a new host.
-        $"(outbound and udp and loopback)";
+        // Loopback UDP, for the lanes' replies on their way back to the application - and only from
+        // the block reserved for them.
+        //
+        // An earlier version said "outbound and udp and loopback" with no port test, on the
+        // reasoning that a dictionary lookup per packet is cheap. It is; ten thousand packets a
+        // second of somebody else's traffic is not. On a machine whose DNS runs through a local
+        // tunnel it broke name resolution outright, and what the user saw was an internet that had
+        // gone, with TCP by address still working and no error anywhere.
+        if (lanes is not null)
+        {
+            filter +=
+                $" or (outbound and udp and loopback and " +
+                $"udp.SrcPort >= {lanes.BasePort} and udp.SrcPort <= {lanes.LastPort})";
+        }
+
+        return filter;
+    }
 
     /// <summary>Filter for the DNS observer: inbound answers only, sniffed.</summary>
     internal const string DnsFilter = "inbound and udp and udp.SrcPort = 53";
@@ -229,17 +243,33 @@ public sealed class DivertPipeline : IAsyncDisposable
         var minor = _socketHandle.GetParam(WinDivertParam.VersionMinor);
         DriverVersion = major is not null && minor is not null ? $"{major}.{minor}" : null;
 
+        if (ProxiesUdp && Proxy is not null && Credential is not null)
+        {
+            try
+            {
+                _lanePool = new UdpLanePool();
+            }
+            catch (IOException ex)
+            {
+                // Without a block there is nowhere to relay datagrams to. Refusing them is the old
+                // behaviour and a working machine; capturing every loopback datagram instead is not.
+                SplitLaneLog.Warning(
+                    LogCategory,
+                    $"UDP will be refused rather than relayed: {ex.Message}");
+            }
+        }
+
         _networkHandle = DivertHandle.Open(
-            NetworkFilter(listenerPort), WinDivertLayer.Network, priority: 0, WinDivertFlags.None);
+            NetworkFilter(listenerPort, _lanePool), WinDivertLayer.Network, priority: 0, WinDivertFlags.None);
 
         // A deeper queue costs kernel memory and buys tolerance for a scheduling hiccup in the
         // drain thread. Dropping a packet here is a stalled connection, so the trade favours depth.
         _networkHandle.SetParam(WinDivertParam.QueueLength, 8192);
         _networkHandle.SetParam(WinDivertParam.QueueTime, 2000);
 
-        if (ProxiesUdp && Proxy is { } proxy && Credential is { } credential)
+        if (_lanePool is { } pool && Proxy is { } proxy && Credential is { } credential)
         {
-            _udpRelay = new UdpRelay(proxy, credential);
+            _udpRelay = new UdpRelay(pool, proxy, credential);
         }
 
         if (TraceRedirects)
@@ -936,6 +966,8 @@ public sealed class DivertPipeline : IAsyncDisposable
 
         _udpPortOwners.Clear();
         _udpOrigins.Clear();
+        _lanePool?.Dispose();
+        _lanePool = null;
 
         if (_udpRelay is { } relay)
         {
