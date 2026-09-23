@@ -214,8 +214,17 @@ public sealed class ManagedPolicyEngineTests : IDisposable
     }
 
     [Fact]
-    public void AncestorsAUserOwnsAreReported() =>
-        Assert.Contains("owned by", PolicyFileTrust.AncestryProblem(Path.Combine(_root, "Policy")));
+    public void AncestorsAnOrdinaryAccountControlsAreReported()
+    {
+        // _root is under the test account's temp folder. On a developer machine that account owns it; on
+        // an elevated CI runner Administrators own it and the account is granted rights on it instead.
+        // Both let someone other than SYSTEM or Administrators move the policy aside, which is the point;
+        // asserting "owned by" passed on one and failed on the other.
+        var problem = PolicyFileTrust.AncestryProblem(Path.Combine(_root, "Policy"));
+
+        Assert.NotNull(problem);
+        Assert.Contains("could move the policy out of the way", problem);
+    }
 
     [Fact]
     public void AnOversizedConfigurationIsRefusedBeforeItIsRead()
