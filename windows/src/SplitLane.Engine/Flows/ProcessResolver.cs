@@ -14,7 +14,17 @@ namespace SplitLane.Engine.Flows;
 /// within seconds, and a cache keyed on the pid alone would eventually attribute one program's
 /// connection to another program's rule.
 /// </param>
-public readonly record struct ProcessInfo(string ExecutablePath, long StartTime)
+/// <param name="PackageFamilyName">
+/// Package family from the process token, or null for an unpackaged process. Read with the same handle
+/// as the path, and authoritative in a way the path is not: Windows sets it when it activates the
+/// package, wherever the package is installed.
+/// </param>
+/// <param name="Image">The image's record in the catalog, or null when no catalog is attached.</param>
+public readonly record struct ProcessInfo(
+    string ExecutablePath,
+    long StartTime,
+    string? PackageFamilyName = null,
+    ImageRecord? Image = null)
 {
     /// <summary>True when the image path could not be determined.</summary>
     public bool IsUnknown => string.IsNullOrEmpty(ExecutablePath);
@@ -41,12 +51,19 @@ public sealed class ProcessResolver
 {
     private readonly ConcurrentDictionary<uint, ProcessInfo> _cache = new();
     private readonly int _maxEntries;
+    private readonly ImageCatalog? _images;
 
     /// <summary>Builds a resolver with a bounded cache.</summary>
-    public ProcessResolver(int maxEntries = 4096)
+    /// <param name="maxEntries">Cache bound.</param>
+    /// <param name="images">
+    /// Where a new process's image is looked up, so every connection it makes afterwards reaches its
+    /// evidence without touching the disk. Null resolves paths only.
+    /// </param>
+    public ProcessResolver(int maxEntries = 4096, ImageCatalog? images = null)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(maxEntries, 1);
         _maxEntries = maxEntries;
+        _images = images;
     }
 
     /// <summary>Cached entry count. Diagnostic.</summary>
@@ -56,24 +73,33 @@ public sealed class ProcessResolver
     public long Misses { get; private set; }
 
     /// <summary>Resolves a pid to its image path, caching the answer.</summary>
-    public string Resolve(uint processId)
+    public string Resolve(uint processId) => ResolveInfo(processId).ExecutablePath;
+
+    /// <summary>Resolves a pid to everything known about it, caching the answer.</summary>
+    public ProcessInfo ResolveInfo(uint processId)
     {
         if (processId == 0)
         {
-            return string.Empty;
+            return default;
         }
 
-        var (rawPath, startTime) = Query(processId);
+        var (rawPath, startTime, packageFamily, cached) = Query(processId);
 
-        if (_cache.TryGetValue(processId, out var cached) && cached.StartTime == startTime)
+        if (cached is { } hit)
         {
-            return cached.ExecutablePath;
+            return hit;
         }
 
         Misses++;
 
-        var path = ExecutablePath.Normalize(rawPath);
-        var info = new ProcessInfo(path, startTime);
+        // The long form, once per process: an image started through an 8.3 name reports that name,
+        // and a file name like CODEX~1.EXE claims no rule.
+        var path = ExecutablePath.Normalize(SplitLane.Platform.ImageFile.LongPath(rawPath));
+
+        // A new process is the moment to look at its image's stamp: a record made for a file that has
+        // since been replaced must not vouch for the replacement.
+        var image = path.Length > 0 ? _images?.Refresh(path) : null;
+        var info = new ProcessInfo(path, startTime, packageFamily, image);
 
         if (_cache.Count >= _maxEntries)
         {
@@ -85,7 +111,7 @@ public sealed class ProcessResolver
         }
 
         _cache[processId] = info;
-        return path;
+        return info;
     }
 
     /// <summary>Drops the cache. Used when routing stops.</summary>
@@ -132,11 +158,14 @@ public sealed class ProcessResolver
     }
 
     /// <summary>
-    /// Reads a process's image path and creation time from a single handle.
+    /// Reads a process's image path and creation time from a single handle, and on a cache miss its
+    /// package family from the same handle.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// One <c>OpenProcess</c> and two cheap queries. The previous version called
+    /// One <c>OpenProcess</c> and two cheap queries, plus a third for a process not seen before. The
+    /// cache is consulted between them so that the package family - a token read - is paid once per
+    /// process rather than once per connection. The previous version called
     /// <c>Process.GetProcessById</c> for the start time, which opens the process a second time and
     /// builds a managed wrapper around it - milliseconds, on a path that runs once per outbound
     /// connection on the machine.
@@ -149,7 +178,7 @@ public sealed class ProcessResolver
     /// recorded anything about it.
     /// </para>
     /// </remarks>
-    private static (string Path, long StartTime) Query(uint processId)
+    private (string Path, long StartTime, string? PackageFamily, ProcessInfo? Cached) Query(uint processId)
     {
         var handle = NativeMethods.OpenProcess(
             NativeMethods.ProcessQueryLimitedInformation, false, processId);
@@ -157,7 +186,7 @@ public sealed class ProcessResolver
         if (handle == nint.Zero)
         {
             // A protected process, or one that has already exited. Unknown identity routes DIRECT.
-            return (string.Empty, 0);
+            return (string.Empty, 0, null, null);
         }
 
         try
@@ -186,7 +215,12 @@ public sealed class ProcessResolver
                 startTime = ((long)created.High << 32) | (uint)created.Low;
             }
 
-            return (path, startTime);
+            if (_cache.TryGetValue(processId, out var cached) && cached.StartTime == startTime)
+            {
+                return (path, startTime, cached.PackageFamilyName, cached);
+            }
+
+            return (path, startTime, SplitLane.Platform.ProcessPackage.FamilyName(handle), null);
         }
         finally
         {

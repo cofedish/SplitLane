@@ -10,10 +10,11 @@ public static class EngineChannel
     /// Named pipe the engine listens on.
     /// </summary>
     /// <remarks>
-    /// The engine runs elevated and the app does not, so the pipe is the trust boundary. The engine
-    /// creates it with an ACL granting the interactive user read/write and nobody else, and it
-    /// refuses every message that is not one of the shapes below. There is deliberately no message
-    /// that makes the engine run a command, open a path, or load a library.
+    /// The engine runs as LocalSystem and the app does not, so the pipe is the trust boundary. The
+    /// engine creates it with an ACL granting the interactive user read/write and Administrators and
+    /// LocalSystem full control, and nobody else, and it refuses every message that is not one of the
+    /// shapes below. There is deliberately no message that makes the engine run a command, open a
+    /// path, or load a library.
     /// </remarks>
     public const string PipeName = "SplitLane.Engine.Control";
 
@@ -36,6 +37,10 @@ public enum EngineRequestKind
     ReloadConfiguration,
 
     /// <summary>Apply a configuration carried in the message itself, and persist it.</summary>
+    /// <remarks>
+    /// It is the user's configuration. A managed policy is put on top of it, so this can change the
+    /// user's own rules but not add, remove or override a managed one.
+    /// </remarks>
     ApplyConfiguration,
 
     /// <summary>Verify the upstream proxy is reachable and speaks SOCKS5.</summary>
@@ -53,7 +58,11 @@ public enum EngineRequestKind
     /// <summary>Start diverting. Idempotent.</summary>
     StartRouting,
 
-    /// <summary>Stop diverting, leaving the engine running and inert. Idempotent.</summary>
+    /// <summary>Stop diverting and close the divert handles, leaving the engine running. Idempotent.</summary>
+    /// <remarks>
+    /// Refused while a managed policy sets <c>forceRoutingEnabled</c>: the channel is open to every
+    /// interactive user, and a request from it is not the organisation.
+    /// </remarks>
     StopRouting,
 
     /// <summary>Ask the engine to look for a newer release now.</summary>
@@ -61,7 +70,8 @@ public enum EngineRequestKind
     /// The engine looks on its own once a day; this is the button. Neither this nor
     /// <see cref="ApplyUpdate"/> carries a version, a URL or a file name - what gets installed is
     /// decided entirely by the signed manifest the engine fetched, so an unelevated caller cannot
-    /// name it. The vocabulary stays a closed enum for exactly this reason.
+    /// name it. The vocabulary stays a closed enum for exactly this reason. Both are refused while a
+    /// managed policy sets <c>disableSelfUpdate</c>.
     /// </remarks>
     CheckForUpdate,
 
@@ -147,7 +157,11 @@ public enum DivertState
     /// <summary>Diverting.</summary>
     Running,
 
-    /// <summary>Running but not diverting, because the master switch is off.</summary>
+    /// <summary>
+    /// Running with the master switch off: every decision is DIRECT. The divert handles stay open, so
+    /// packets are still captured and reinjected; only <see cref="EngineRequestKind.StopRouting"/>
+    /// closes them.
+    /// </summary>
     Paused,
 
     /// <summary>Failed to start, or stopped because of an error.</summary>
@@ -185,8 +199,12 @@ public sealed record EngineStatus
     public ulong ProxiedFlowCount { get; init; }
 
     /// <summary>
-    /// Selected-app UDP datagrams refused. A non-zero value here explains "the app is broken since I
-    /// enabled it".
+    /// Connections and datagrams refused: TCP connections decided BLOCK (a Block rule, or a file that
+    /// is no longer its rule's application), and datagrams the packet layer dropped - a Block rule, a
+    /// socket held while its identity is verified, or a selected application's UDP with relaying off,
+    /// no free lane, or an IPv6 destination. Datagrams a lane drops because the proxy refused the
+    /// association are not counted here. A non-zero value explains "the app is broken since I enabled
+    /// it".
     /// </summary>
     public ulong BlockedFlowCount { get; init; }
 
@@ -222,6 +240,18 @@ public sealed record EngineStatus
 
     /// <summary>Why the last check or install failed, when it did.</summary>
     public string? UpdateError { get; init; }
+
+    /// <summary>Whether a managed policy is in force: <c>None</c>, <c>Applied</c> or <c>Rejected</c>.</summary>
+    public string? PolicyState { get; init; }
+
+    /// <summary>What the policy is, or why it was not used. For the window and for support.</summary>
+    public string? PolicyDetail { get; init; }
+
+    /// <summary>How many of the rules in force come from the managed policy.</summary>
+    public int ManagedRuleCount { get; init; }
+
+    /// <summary>Whether the policy requires routing to stay on, so the app should not offer to stop it.</summary>
+    public bool RoutingLockedByPolicy { get; init; }
 
     /// <summary>How long the engine has been diverting.</summary>
     [JsonIgnore]

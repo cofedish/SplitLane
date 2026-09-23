@@ -44,6 +44,25 @@ public sealed record NatEntry(
     public bool SynRedirected { get; set; }
 }
 
+/// <summary>What was decided about a connection that is not redirected.</summary>
+public enum NatVerdict
+{
+    /// <summary>Leave it alone: its packets are reinjected unchanged.</summary>
+    Direct = 0,
+
+    /// <summary>
+    /// Refuse it: its packets are dropped. A lane the user chose, or a selected application's
+    /// connection that cannot be carried safely.
+    /// </summary>
+    Block = 1,
+
+    /// <summary>
+    /// Hold it: its packets are dropped until the process's identity is verified, then the connection
+    /// is decided again. TCP retransmits the SYN, so the connection proceeds once the answer is in.
+    /// </summary>
+    Pending = 2,
+}
+
 /// <summary>
 /// Maps a redirected connection back to where it was actually going.
 /// </summary>
@@ -57,7 +76,7 @@ public sealed record NatEntry(
 /// A local port is unique per protocol per local address, not globally, so two sockets bound to the
 /// same port on different local addresses would collide here. Windows allocates ephemeral ports from
 /// a shared pool and the case requires a deliberate <c>SO_REUSEADDR</c> bind, so the collision is
-/// theoretical rather than practical; it is recorded in docs/windows/THREAT_MODEL.md as W-6 rather
+/// theoretical rather than practical; it is recorded in docs/THREAT_MODEL.md as W-6 rather
 /// than defended against, because defending against it would mean keying on an address the redirect
 /// listener never sees.
 /// </para>
@@ -129,13 +148,55 @@ public sealed class NatTable(TimeProvider? timeProvider = null)
     /// un-redirected.
     /// </para>
     /// </remarks>
-    public void RecordDirect(ushort localPort, IPAddress destination, ushort destinationPort)
+    public void RecordDirect(ushort localPort, IPAddress destination, ushort destinationPort) =>
+        RecordVerdict(localPort, destination, destinationPort, NatVerdict.Direct);
+
+    /// <summary>
+    /// Records a decision that produced no redirect, and what the packet loop must do about it.
+    /// </summary>
+    /// <remarks>
+    /// Block and Pending used to be recorded as plain "leave alone", which made a TCP connection a
+    /// rule blocked leave the machine DIRECT - counted as blocked, and delivered. The verdict is what
+    /// makes the packet loop actually drop it.
+    /// </remarks>
+    public void RecordVerdict(ushort localPort, IPAddress destination, ushort destinationPort, NatVerdict verdict)
     {
         ArgumentNullException.ThrowIfNull(destination);
-        _direct[localPort] = new DirectDecision(destination, destinationPort, _time.GetUtcNow());
+        _direct[localPort] = new DirectDecision(destination, destinationPort, _time.GetUtcNow(), verdict);
     }
 
-    /// <summary>Looks up a live "leave alone" decision, treating an expired one as absent.</summary>
+    /// <summary>
+    /// Replaces a pending verdict with the decision that followed it, but only if the pending one is
+    /// still the row on that port. A socket that closed, or a port since reused for another
+    /// connection, is left alone.
+    /// </summary>
+    public bool TryResolvePending(ushort localPort, IPAddress destination, ushort destinationPort)
+    {
+        return _direct.TryGetValue(localPort, out var found) &&
+               found.Verdict == NatVerdict.Pending &&
+               found.Port == destinationPort &&
+               found.Destination.Equals(destination) &&
+               _direct.TryRemove(new KeyValuePair<ushort, DirectDecision>(localPort, found));
+    }
+
+    /// <summary>Looks up a live non-redirect decision with its verdict.</summary>
+    public bool TryGetVerdict(
+        ushort localPort, out IPAddress destination, out ushort destinationPort, out NatVerdict verdict)
+    {
+        verdict = NatVerdict.Direct;
+        if (!TryGetDirect(localPort, out destination, out destinationPort))
+        {
+            return false;
+        }
+
+        verdict = _direct.TryGetValue(localPort, out var found) ? found.Verdict : NatVerdict.Direct;
+        return true;
+    }
+
+    /// <summary>
+    /// Looks up a live decision that produced no redirect - of any verdict - treating an expired one
+    /// as absent.
+    /// </summary>
     public bool TryGetDirect(ushort localPort, out IPAddress destination, out ushort destinationPort)
     {
         destination = null!;
@@ -203,7 +264,8 @@ public sealed class NatTable(TimeProvider? timeProvider = null)
     private readonly record struct DirectDecision(
         IPAddress Destination,
         ushort Port,
-        DateTimeOffset CreatedAt);
+        DateTimeOffset CreatedAt,
+        NatVerdict Verdict = NatVerdict.Direct);
 
     /// <summary>Builds an entry from a routing decision and a socket-layer event.</summary>
     public static NatEntry EntryFor(

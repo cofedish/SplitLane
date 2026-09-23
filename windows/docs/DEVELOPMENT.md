@@ -9,9 +9,15 @@ dotnet build SplitLane.Windows.slnx
 dotnet test  SplitLane.Windows.slnx
 ```
 
-344 tests. None of them needs a network, a driver, elevation, or a daemon to be started first — the
-SOCKS5 integration tests run against an in-process server in `tools/socks5-testbed`, so they run on
-every `dotnet test` rather than being skipped like the macOS project's Docker-based equivalents.
+586 tests: 450 in `SplitLane.Core.Tests`, 136 in `SplitLane.Engine.Tests`. None of them needs a
+network, a driver, elevation, or a daemon to be started first — the SOCKS5 integration tests run
+against an in-process server in `tools/socks5-testbed`, so they run on every `dotnet test` rather than
+being skipped like the macOS project's Docker-based equivalents.
+
+The solution builds for `x64`, so its output is under `bin\x64\Debug`, not `bin\Debug`: the engine at
+`src\SplitLane.Engine\bin\x64\Debug\net10.0-windows\win-x64\SplitLane.Engine.exe`, the app at
+`src\SplitLane.App\bin\x64\Debug\net10.0-windows\SplitLane.exe`. The SOCKS5 testbed is not
+platform-specific and stays under `bin\Debug`.
 
 Warnings are errors, project-wide. The macOS Definition of Done asks for "zero new warnings"; making
 the build enforce it is cheaper than reviewing for it.
@@ -32,17 +38,51 @@ and the mode to check your proxy settings in before installing a kernel driver.
 
 ```powershell
 .\tools\fetch-windivert.ps1                # once
-SplitLane.Engine.exe --check               # unelevated on purpose
+SplitLane.Engine.exe --check               # runs unelevated; elevated, it also loads the driver
 SplitLane.Engine.exe                       # from an ELEVATED prompt
 ```
 
-`--check` reports the three things that independently prevent the divert layer from starting —
-missing driver, no elevation, driver blocked by policy — because they need three different fixes and
-a single "it did not work" tells you nothing. Its exit codes are `0` ready, `2` not elevated, `3` no
-driver, `4` driver refused to load.
+`--check` exists because three things independently prevent the divert layer from starting —
+missing driver, no elevation, driver blocked by policy — and they need three different fixes, which a
+single "it did not work" does not tell apart. It checks them in that order and stops at the first that
+fails: `3` no driver library, `2` not elevated, `4` the driver refused to load, `0` ready. So an
+unelevated `--check` reports only whether the library is present and that the prompt is not elevated;
+it returns before trying to load the driver, and only an elevated one can say whether the driver
+loads.
 
 The engine's manifest is `asInvoker`, not `requireAdministrator`. Requiring elevation would make
 `--check` — the one command written for a machine that cannot run the engine — itself unrunnable.
+
+The installed product runs the same executable as the `SplitLane` service (LocalSystem, automatic
+start, `--service --no-console-log`), registered by the MSI. Running it by hand as above is for a
+source checkout or the portable archive; on an installed machine, stop the service first, because
+only one engine can divert at a time.
+
+## Why is this application not routed
+
+```powershell
+SplitLane.Engine.exe --explain [--config <file>] [--policy <file> [--trust-policy]] [--all] [--pid N]
+SplitLane.Engine.exe --describe <exe>
+```
+
+`--explain` answers the first question anyone asks about a machine that is "not routing" something:
+which rule matches which running process, how, and what the engine would do. It reads the
+configuration (the live one, or `--config`), migrates it in memory if it still has path rules —
+showing each rule before and after — applies the managed policy exactly as the service judges it
+(the live one, or `--policy`; `--trust-policy` skips the owner and permission check, for trying out a
+policy file you wrote yourself), then resolves every running process with the same calls the socket
+pump makes, verifies its image the way the engine does, and decides a TCP connection to a TEST-NET
+address for it. By default it lists only processes a rule involves; `--all` lists every one, `--pid`
+one.
+
+`--describe <exe>` prints, as JSON, the identity a rule for that file would record — the same code
+the app runs when someone picks an application. It is how a managed-policy rule is written for
+machines the author is not sitting at (ADR W-0014).
+
+Both run before the engine creates a log or opens anything, write nothing, and need no elevation or
+driver. `--explain` has been run against the live configuration and processes on the development
+machine, unelevated; it showed the three Codex rules migrated and `codex.exe` going from DIRECT to
+PROXY.
 
 ## Driving the interface
 
@@ -51,7 +91,7 @@ screenshots. It is how the interface is reviewed without a person sitting in fro
 
 ```powershell
 .\tools\uiprobe\uiprobe.ps1 `
-    -Exe .\src\SplitLane.App\bin\Debug\net10.0-windows\SplitLane.exe `
+    -Exe .\src\SplitLane.App\bin\x64\Debug\net10.0-windows\SplitLane.exe `
     -OutDir .\artifacts\shots `
     -Steps @(
         "shot:overview",
@@ -101,13 +141,16 @@ The installer project is deliberately **not** in `SplitLane.Windows.slnx`. The W
 toolchain that must be restored before MSBuild can parse the file, and including it would mean
 `dotnet build` fails on a clean machine for someone who only wanted to run the tests.
 
-Three things the installer does not do, each on purpose:
+Three decisions about the installer, two of which have since been reversed:
 
-- **It does not bundle WinDivert.** The driver is third-party, dual-licensed, and this repository has
+- **It did not bundle WinDivert.** The driver is third-party, dual-licensed, and this repository has
   not chosen a licence of its own. **Superseded by ADR W-0009**: the packaged product ships it,
   with its licence, because an installer that leaves you without a working program is not an
   installer. `fetch-windivert.ps1` is still how a source checkout gets one.
-- **It does not register a service.** There is no service host yet.
+- **It did not register a service**, because there was no service host. It does now: the MSI installs
+  the engine as the `SplitLane` service, LocalSystem, automatic start, starts it on install, and stops
+  and removes it on uninstall. Administrator rights are needed to install; the installed product runs
+  without them.
 - **It carries no licence dialog**, because there is no licence. Every stock WiX UI set includes one,
   so the MSI ships with the basic progress UI rather than presenting terms that do not exist.
 
@@ -147,6 +190,14 @@ The script starts the bundled SOCKS5 server, writes a configuration with one rul
 starts the engine elevated (accept the UAC prompt), runs curl, and reports the verdict. It cleans up
 after itself unless you pass `-KeepRunning`.
 
+**On a machine where SplitLane is installed, do not run this, `stress-divert.ps1` or
+`measure-direct-cost.ps1` as they stand.** All three predate the service: they stop every
+`SplitLane.Engine` process by image name, which includes the installed service, and do not start it
+again. `verify-divert.ps1` and `stress-divert.ps1` also finish by deleting `%ProgramData%\SplitLane`
+outright, which was harmless before there was an installed product and now removes the real
+configuration, the stored proxy credential and the policy folder. `tools/verify-identity.ps1` was
+written with a backup and restore for exactly this reason.
+
 The proof comes from the **upstream side**: the test server logs every CONNECT it is asked for. If a
 selected application's connection was really intercepted and relayed, it appears there by name. A
 count of redirected packets proves only that SplitLane rewrote something.
@@ -181,9 +232,11 @@ one a person routing their traffic through this cares about.
 .\tools\stress-divert.ps1 -Apps 6 -Requests 100 -Concurrency 25 -PayloadKb 1024
 ```
 
-Several copies of `curl.exe` at distinct paths become distinct applications — SplitLane routes on the
-image path, so this exercises several routing keys rather than one rule hit repeatedly — and one more
-copy is left unselected as a control.
+Several copies of `curl.exe`, each under its own name in its own folder, become distinct applications,
+so this exercises several routing keys rather than one rule hit repeatedly — and one more copy is left
+unselected as a control. The script writes path rules. Since W-0013 the engine migrates those to
+identity rules in the background; a signed identity includes the file name, so the renamed copies
+stay distinct applications. The last run recorded below was made before that change.
 
 Requests are aimed at **TEST-NET-3 (`203.0.113.0/24`)**, reserved for documentation and routed
 nowhere, and the SOCKS5 testbed answers as the origin as well as the proxy so the address never has
@@ -221,19 +274,60 @@ writes to `bin/x64/Debug`, so the first measurement after the change came back i
 before it — correct to three digits, and about the wrong program. Every tool now resolves the newest
 engine binary and prints its build time.
 
+## Verifying identity
+
+```powershell
+.\tools\verify-identity.ps1              # from an ELEVATED terminal
+.\tools\verify-identity.ps1 -DryRun      # from any terminal
+```
+
+`dotnet test` proves that rules match by identity over recorded evidence, and the integration tests
+start real processes from copies of a signed binary and verify them with WinVerifyTrust. What it
+cannot prove is the part that only happens under the driver: that the socket layer names the real
+process behind a real connection from a path the engine has never seen, that the engine holds the SYN
+while it verifies that file, and that the retransmission is the one redirected to the proxy.
+
+The script makes a rule from a copy of `curl.exe` in a hash directory (with `--describe`, the code the
+app runs), then runs the same binary *updated* into a new hash directory with the old one deleted,
+*moved* to an unrelated folder, and a control that is not the selected application. Every request goes
+to TEST-NET-3 and the SOCKS5 testbed counts CONNECTs, so the expected result is +1 for each copy and
++0 for the control. The first request from each new copy should take about a second: that is the
+held SYN.
+
+It has to change the machine to run — the installed service is stopped, and the test rule is written
+to `%ProgramData%\SplitLane` — so before anything changes it backs up `configuration.json` and
+`configuration.v2.json` with their hashes, and restores them byte for byte, restarts the service if it
+was running, and removes what it created, under `try/finally`. Engines are stopped by process id,
+never by image name. `restore-instructions.txt` in the backup folder says how to do it by hand. For
+about a minute your own rules are not in force.
+
+`-DryRun` does everything that needs no privilege and changes nothing: it starts the test server,
+makes and describes the probe, writes the test configuration into the artifacts folder instead of
+`%ProgramData%`, and has the engine parse it with `--explain --config`.
+
+**The elevated run has not been done.** Until it has, application identity is unit- and
+integration-tested, not driver-verified. The script also does not cover a real vendor update (new
+bytes under the same signer), helpers, packaged or unsigned applications, UDP, or the refusal of a
+different file at a rule's recorded location — those are covered by `dotnet test` only.
+
 ## Layout
 
 ```
 SplitLane.Windows.slnx
-src/SplitLane.Core/          models, rules, SOCKS5, configuration, IPC contracts, logging
-src/SplitLane.Engine/        WinDivert interop, divert pipeline, NAT, relay, control server
+src/SplitLane.Core/          models, rules, identity, policy, SOCKS5, configuration, IPC, logging
+src/SplitLane.Engine/        WinDivert interop, divert pipeline, NAT, identity catalog, relay, control
 src/SplitLane.App/           WPF — Theme, Views, ViewModels, Services, Infrastructure
-tests/SplitLane.Core.Tests/  261 tests: rules, paths, addresses, SOCKS5, configuration
-tests/SplitLane.Engine.Tests/ 66 tests: packet rewrite, NAT table, DNS parser, relay integration
+src/Shared/                  identity readers (stamp, Authenticode, hash, package family); linked
+                             into App and Engine
+tests/SplitLane.Core.Tests/  444 tests: rules, identity, migration, policy, paths, addresses, SOCKS5,
+                             configuration, updates
+tests/SplitLane.Engine.Tests/ 109 tests: packet rewrite, NAT, DNS parser, relay, identity, policy
 tools/socks5-testbed/        the SOCKS5 server used by tests and by hand
 tools/fetch-windivert.ps1    downloads the driver; never commits it
 tools/build-installer.ps1    publishes both apps and builds the MSI; CI runs this same script
 tools/verify-divert.ps1      the elevated end-to-end interception test
+tools/verify-identity.ps1    the elevated identity test: a rule follows its application through an
+                             update and a move; restores the machine afterwards
 tools/stress-divert.ps1      several applications at once, under load, with a control
 tools/measure-direct-cost.ps1 what SplitLane costs an application it was not asked to touch
 tools/engine-binary.ps1      picks the newest engine build, so no tool runs a stale one
@@ -249,12 +343,15 @@ docs/screenshots/            captures of the running application
   or a user logout - the two things it exists to survive.
 - Nothing is code-signed, so SmartScreen warns and the driver has to be trusted on the strength of
   its own signature rather than ours.
-- **Updates cannot be delivered while the repository is private.** The mechanism works — see ADR
-  W-0011, and the signing is verified — but release assets on a private repository answer 404 to an
-  anonymous request, which is what the engine makes and all it can make. A token compiled into the
-  build would put one credential with read access to a private repository into every installation.
-  The fix is a public location for the artifacts, not a credential.
+- **An update has not been installed through the updater.** The mechanism is built — see ADR W-0011
+  — and the signing is verified end to end. The repository is now public, and
+  `https://github.com/cofedish/SplitLane/releases/latest/download/update.json` answers an anonymous
+  request with HTTP 200 (checked 2026-09-23), so the engine can reach it. No installation has yet
+  found, downloaded and installed a release that way.
 - Interception has been verified on IPv4 only. IPv6, sleep and resume, and adapter changes mid-flow
   are untested.
+- Application identity (W-0013) and the managed policy (W-0014) have not been exercised under the
+  driver or on a live install: `tools/verify-identity.ps1` has not been run elevated, and no policy
+  file has been placed as SYSTEM. The app does not yet show managed rules.
 - The installer has been installed, driven and uninstalled by hand on one machine, on Windows 11.
   No other version of Windows has run it.

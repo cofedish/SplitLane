@@ -1,6 +1,8 @@
 # ADR W-0010 — Match packaged applications by package family
 
-**Status:** Accepted
+**Status:** Accepted; extended by [W-0013](0013-match-applications-by-verified-identity.md), which reads
+the package family from the process token instead of the path, so a package moved to another drive
+still matches and a directory that merely looks like `WindowsApps` claims nothing.
 **Date:** 2026-08-21
 **Relates to:** [W-0002](0002-route-on-image-path.md) (route on image path), [W-0003](0003-family-matching-safety.md) (shared-directory refusal)
 
@@ -58,5 +60,6 @@ executable.
 - Matching identity is now two things rather than one: a path, or a package family. W-0002 still
   holds for everything that is not packaged.
 - The publisher hash is trusted as an identifier without the signature being checked at match time.
-  That is the same trust W-0002 places in the path, and the same hardening path applies - see
-  `docs/THREAT_MODEL.md`.
+  Since W-0013 it is read from the process token, which Windows sets at activation, rather than from
+  the path; packages registered from unsigned layouts (Developer Mode) are not treated as package
+  identities at all. See `docs/THREAT_MODEL.md`.

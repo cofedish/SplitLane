@@ -98,6 +98,15 @@ public sealed class UpdateService : IDisposable
     /// <summary>When the engine last managed to ask.</summary>
     public DateTimeOffset? LastChecked { get; private set; }
 
+    /// <summary>
+    /// Whether the managed policy has turned self-update off. Honoured at every check and every
+    /// install, so a policy that changes while the engine runs takes effect at the next one.
+    /// </summary>
+    public bool DisabledByPolicy { get; set; }
+
+    private const string DisabledMessage =
+        "self-update is turned off by your organisation's policy; releases are delivered by your IT department";
+
     /// <summary>Begins checking periodically.</summary>
     public void Start()
     {
@@ -114,6 +123,13 @@ public sealed class UpdateService : IDisposable
     /// </remarks>
     public async Task<UpdateState> CheckAsync(CancellationToken cancellationToken = default)
     {
+        if (DisabledByPolicy)
+        {
+            Available = null;
+            LastError = DisabledMessage;
+            return State;
+        }
+
         if (!await _gate.WaitAsync(0, cancellationToken).ConfigureAwait(false))
         {
             return State;
@@ -171,6 +187,12 @@ public sealed class UpdateService : IDisposable
     /// </remarks>
     public async Task<bool> ApplyAsync(CancellationToken cancellationToken = default)
     {
+        if (DisabledByPolicy)
+        {
+            LastError = DisabledMessage;
+            return false;
+        }
+
         var manifest = Available;
 
         if (manifest is null)

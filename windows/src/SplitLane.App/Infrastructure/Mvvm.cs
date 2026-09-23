@@ -73,12 +73,25 @@ public sealed class RelayCommand : ICommand
 /// </remarks>
 public sealed class AsyncRelayCommand : ICommand
 {
-    private readonly Func<Task> _execute;
+    private readonly Func<object?, Task> _execute;
     private readonly Func<bool>? _canExecute;
     private bool _running;
 
     /// <summary>Builds an async command.</summary>
     public AsyncRelayCommand(Func<Task> execute, Func<bool>? canExecute = null)
+    {
+        ArgumentNullException.ThrowIfNull(execute);
+        _execute = _ => execute();
+        _canExecute = canExecute;
+    }
+
+    /// <summary>Builds an async command that takes the binding's parameter.</summary>
+    /// <remarks>
+    /// For per-row actions that read a file. Identifying an application verifies its signature, which
+    /// is seconds for a large executable, and one command shared by every row means a second click
+    /// while the first is still reading waits its turn instead of racing it into the same list.
+    /// </remarks>
+    public AsyncRelayCommand(Func<object?, Task> execute, Func<bool>? canExecute = null)
     {
         _execute = execute ?? throw new ArgumentNullException(nameof(execute));
         _canExecute = canExecute;
@@ -110,7 +123,7 @@ public sealed class AsyncRelayCommand : ICommand
 
         try
         {
-            await _execute().ConfigureAwait(true);
+            await _execute(parameter).ConfigureAwait(true);
         }
         finally
         {

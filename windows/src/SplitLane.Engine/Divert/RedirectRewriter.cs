@@ -78,7 +78,9 @@ public static class RedirectRewriter
     /// connection's NAT entry.
     /// </para>
     /// <para>
-    /// Two shapes, because the loopback one is not confirmed to work. See ADR W-0001 and
+    /// Two shapes. Loopback is the default and the one verified on a live machine. The local-address
+    /// shape is kept for diagnosis only: its packets carry one of the machine's own addresses as their
+    /// source, and a physical interface rejects them as spoofed. See ADR W-0001 and
     /// docs/THREAT_MODEL.md.
     /// </para>
     /// </remarks>

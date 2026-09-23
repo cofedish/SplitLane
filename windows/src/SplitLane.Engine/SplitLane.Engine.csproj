@@ -34,6 +34,16 @@
   </ItemGroup>
 
   <!--
+    Application identity is read by linked source, not a project: stamp, Authenticode, hash and
+    package family in Shared\ImageInspection, the evidence built from them in Shared\Identity. A new
+    assembly would have to be added to the installer, and the app and the engine must compute
+    byte-identical identities from the same file - one source compiled into both guarantees that.
+  -->
+  <ItemGroup>
+    <Compile Include="..\Shared\**\*.cs" LinkBase="Shared" />
+  </ItemGroup>
+
+  <!--
     WinDivert.dll and its .sys are fetched by tools/fetch-windivert.ps1 rather than committed. They
     are a signed third-party kernel driver; vendoring a driver binary in a source repository is a
     supply-chain decision nobody should make implicitly.

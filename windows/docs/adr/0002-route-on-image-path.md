@@ -1,6 +1,8 @@
 # ADR W-0002 — Route on the process image path, not the signature
 
-**Status:** accepted
+**Status:** superseded by [W-0013](0013-match-applications-by-verified-identity.md) as the identity a
+rule records. The image path is still how a process is found at connect time; it is no longer what a
+rule is keyed on, because it changed under the Codex CLI's rule on its first update.
 **Date:** 2026-08-20
 **Windows counterpart of:** ADR 0002 (use the signing identifier for routing)
 

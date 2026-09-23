@@ -211,6 +211,14 @@ public sealed class ControlServer : IAsyncDisposable
                 return EngineResponse.Ok;
 
             case EngineRequestKind.StopRouting:
+                // The control channel is open to every interactive user. When the organisation's
+                // policy says routing stays on, a request from that channel is not the organisation.
+                if (_runtime.IsRoutingLockedByPolicy)
+                {
+                    return EngineResponse.Failed(
+                        "Routing is required by your organisation's policy and cannot be stopped from here.");
+                }
+
                 await _runtime.StopAsync().ConfigureAwait(false);
                 return EngineResponse.Ok;
 

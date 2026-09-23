@@ -6,7 +6,7 @@
     It runs as the interactive user and deliberately does not request elevation: everything that
     needs administrative rights lives behind the engine's control channel. An app that asked for
     elevation would be an app whose entire UI surface runs as administrator, which is a much larger
-    thing to get right than a named pipe with nine message kinds.
+    thing to get right than a named pipe with eleven message kinds.
   -->
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
@@ -31,6 +31,16 @@
     already carries it. The engine, which is not a desktop app, does need the package.
   -->
 
+
+  <!--
+    Application identity is read by linked source, not a project: stamp, Authenticode, hash and
+    package family in Shared\ImageInspection, the evidence built from them in Shared\Identity. A new
+    assembly would have to be added to the installer, and the app and the engine must compute
+    byte-identical identities from the same file - one source compiled into both guarantees that.
+  -->
+  <ItemGroup>
+    <Compile Include="..\Shared\**\*.cs" LinkBase="Shared" />
+  </ItemGroup>
 
   <ItemGroup>
     <!-- Reading the engine service's state, so "not running" can say what to do about it. -->

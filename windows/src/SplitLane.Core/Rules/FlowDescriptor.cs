@@ -41,6 +41,11 @@ public enum FlowProtocol
 /// <param name="IsEngineTraffic">
 /// True when the flow belongs to the SplitLane engine itself. First layer of proxy-loop defence.
 /// </param>
+/// <param name="Image">
+/// What the engine knows about the process image beyond its path: package family, product name,
+/// signature, size, hash. Null means the path is all there is, which is enough for a schema 1 path
+/// rule and leaves every identity rule waiting for evidence.
+/// </param>
 public readonly record struct FlowDescriptor(
     uint ProcessId,
     string ExecutablePath,
@@ -48,7 +53,8 @@ public readonly record struct FlowDescriptor(
     ushort RemotePort,
     FlowProtocol Protocol,
     string? RemoteHostname = null,
-    bool IsEngineTraffic = false)
+    bool IsEngineTraffic = false,
+    ImageEvidence? Image = null)
 {
     /// <summary>
     /// True when the destination is on this machine or this link.

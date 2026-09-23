@@ -18,7 +18,17 @@ public readonly record struct ConfigurationVersion(int SchemaVersion, ulong Gene
     : IComparable<ConfigurationVersion>
 {
     /// <summary>Wire format understood by this build.</summary>
-    public const int CurrentSchema = 1;
+    /// <remarks>
+    /// 2 added application identity (<see cref="AppIdentity.Kind"/> and its fields) and rule status. A
+    /// schema 1 document still reads - every field it has kept its meaning - and is migrated by
+    /// <see cref="Configuration.ConfigurationMigrator"/>. A schema 2 document is written to a file of
+    /// its own so that a build from before schema 2, installed as a rollback, still finds the schema 1
+    /// file it understands.
+    /// </remarks>
+    public const int CurrentSchema = 2;
+
+    /// <summary>The schema before application identity: every rule keyed on a path.</summary>
+    public const int PathSchema = 1;
 
     /// <summary>A fresh stamp at the current schema.</summary>
     public ConfigurationVersion()

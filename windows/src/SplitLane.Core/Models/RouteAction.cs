@@ -6,12 +6,10 @@ namespace SplitLane.Core.Models;
 public enum RouteAction
 {
     /// <summary>
-    /// Leave the flow alone. On Windows this means the engine never diverts the connection's
-    /// packets: they are reinjected byte-for-byte, or — for the overwhelming majority of traffic —
-    /// never matched by a divert filter in the first place.
+    /// Leave the flow alone. On Windows the connection's packets are still copied to user mode by the
+    /// divert filter and reinjected byte-for-byte: unmodified, but not untouched (THREAT_MODEL W-1).
     ///
-    /// This is the default for every application the user has not selected, and it is what makes
-    /// "unselected apps are untouched" literally true rather than approximately true.
+    /// This is the default for every application the user has not selected.
     /// </summary>
     Direct = 0,
 
@@ -21,8 +19,10 @@ public enum RouteAction
     Proxy = 1,
 
     /// <summary>
-    /// Refuse the flow. Used for selected-app traffic SplitLane cannot carry safely — currently
-    /// UDP, which would otherwise escape the proxy silently (ADR 0004).
+    /// Refuse the flow. A lane the user can choose for an application, and the answer for
+    /// selected-application traffic SplitLane cannot carry safely: UDP when the proxy will not relay
+    /// it, and a flow whose application identity is still being verified or no longer matches its
+    /// rule.
     /// </summary>
     Block = 2,
 }
@@ -45,8 +45,8 @@ public enum RouteReasonKind
     ExecutableFamilyRule = 2,
 
     /// <summary>
-    /// The destination is loopback or link-local. Never proxied, for any app: this is the third
-    /// layer of proxy-loop defence (docs/NETWORKING.md §3).
+    /// The destination is loopback or link-local. Never proxied, for any app: this is the second
+    /// layer of proxy-loop defence (docs/NETWORKING.md §6).
     /// </summary>
     LocalDestination = 3,
 
@@ -57,7 +57,10 @@ public enum RouteReasonKind
     /// </summary>
     UnidentifiedSource = 4,
 
-    /// <summary>A selected application's UDP flow, refused so it cannot bypass the proxy.</summary>
+    /// <summary>
+    /// A selected application's UDP flow, refused because relaying UDP is turned off
+    /// (<see cref="RuntimeConfiguration.ProxiesUdp"/>). It is never sent DIRECT instead.
+    /// </summary>
     UdpNotSupported = 5,
 
     /// <summary>Routing is paused by the master switch.</summary>
@@ -68,6 +71,38 @@ public enum RouteReasonKind
     /// the engine's own upstream connection must never be re-diverted into the engine.
     /// </summary>
     EngineSelfTraffic = 7,
+
+    /// <summary>A rule matched the process's package family, read from its token.</summary>
+    PackageRule = 8,
+
+    /// <summary>
+    /// A rule matched this executable by its verified publisher, product and file name - wherever it
+    /// is installed and whatever version it is.
+    /// </summary>
+    SignedIdentityRule = 9,
+
+    /// <summary>
+    /// A rule matched a helper of the selected application: signed by the same publisher, and either
+    /// carrying the same product name or installed under the same install directory.
+    /// </summary>
+    SignedFamilyRule = 10,
+
+    /// <summary>A rule matched the exact bytes of an unsigned executable.</summary>
+    FileHashRule = 11,
+
+    /// <summary>
+    /// The process claims to be a selected application - its file name, folder or size points at a
+    /// rule - and the signature or hash that would confirm it is still being checked. The flow is held,
+    /// not sent anywhere, until the answer arrives.
+    /// </summary>
+    IdentityPending = 12,
+
+    /// <summary>
+    /// The file at a rule's recorded location is no longer the application the rule was made for: a
+    /// different or missing signature, or different bytes. Refused, so neither the replacement
+    /// inherits the rule nor the selected application's traffic leaks out DIRECT.
+    /// </summary>
+    IdentityMismatch = 13,
 }
 
 /// <summary>
@@ -85,11 +120,16 @@ public enum RouteReasonKind
 /// the rule. Showing it verbatim is what explains family matching to a user looking at a helper
 /// process they never selected.
 /// </param>
+/// <param name="Needs">
+/// For <see cref="RouteReasonKind.IdentityPending"/>, what has to be read about the executable
+/// before the flow can be decided.
+/// </param>
 public readonly record struct RouteDecision(
     RouteAction Action,
     RouteReasonKind Reason,
     string? RuleKey = null,
-    string? MatchedPath = null)
+    string? MatchedPath = null,
+    Rules.EvidenceNeeds Needs = Rules.EvidenceNeeds.None)
 {
     /// <summary>No rule matched; DIRECT.</summary>
     public static readonly RouteDecision DirectDefault =
@@ -106,9 +146,15 @@ public readonly record struct RouteDecision(
         RouteReasonKind.ExecutableFamilyRule => $"family rule {RuleKey} matched {MatchedPath}",
         RouteReasonKind.LocalDestination => "destination is loopback or link-local",
         RouteReasonKind.UnidentifiedSource => "source process could not be identified",
-        RouteReasonKind.UdpNotSupported => "selected-app UDP is refused, not proxied",
+        RouteReasonKind.UdpNotSupported => "selected-app UDP is refused because UDP relaying is off",
         RouteReasonKind.RoutingDisabled => "routing is paused",
         RouteReasonKind.EngineSelfTraffic => "flow belongs to the SplitLane engine itself",
+        RouteReasonKind.PackageRule => $"package rule for {RuleKey}",
+        RouteReasonKind.SignedIdentityRule => $"signed identity of {RuleKey}",
+        RouteReasonKind.SignedFamilyRule => $"signed helper of {RuleKey}: {MatchedPath}",
+        RouteReasonKind.FileHashRule => $"file hash pinned by {RuleKey}",
+        RouteReasonKind.IdentityPending => $"held while {MatchedPath} is verified against {RuleKey}",
+        RouteReasonKind.IdentityMismatch => $"{MatchedPath} is no longer the application {RuleKey} was made for",
         _ => Reason.ToString(),
     };
 }

@@ -185,6 +185,178 @@ public static class ExecutablePath
         return true;
     }
 
+    /// <summary>
+    /// Whether a directory name is one an installer or updater generates rather than a name.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A version (see <see cref="IsVersionedDirectory"/>), a content hash, or a GUID. The hash shape is
+    /// what broke the Codex rules on the machine this was written on: its command-line tool lives in
+    /// <c>OpenAI\Codex\bin\247581e40ee272fb\codex.exe</c>, the next update put it in
+    /// <c>...\bin\d375f7df50d3b421\</c>, and a family rooted at the old hash directory matched nothing.
+    /// </para>
+    /// <para>
+    /// A hash is 8 to 64 hexadecimal characters with at least one digit and at least one letter, so
+    /// that an English word spelled in a-f ("facade", "deadbeef") or a plain number ("20240101") is not
+    /// mistaken for one. It is only used to decide how far a family reaches: identity itself is the
+    /// signature, so a directory misread here widens a family to the same publisher's files and no
+    /// further.
+    /// </para>
+    /// </remarks>
+    public static bool IsVolatileDirectory(string? segment)
+    {
+        if (string.IsNullOrEmpty(segment))
+        {
+            return false;
+        }
+
+        return IsVersionedDirectory(segment) || IsHashDirectory(segment) || IsGuidDirectory(segment);
+    }
+
+    /// <summary>
+    /// The directory an application is installed in, above any directory its updater renames.
+    /// </summary>
+    /// <remarks>
+    /// The root of <see cref="FamilyScope"/>: <c>Codex\bin\247581e40ee272fb\codex.exe</c> gives
+    /// <c>Codex\bin</c>, <c>Toolbox\apps\IDEA-U\ch-0\241.14494.240\bin\idea64.exe</c> gives
+    /// <c>IDEA-U\ch-0</c>. With no volatile directory it is simply the executable's own directory.
+    /// </remarks>
+    public static string InstallRoot(string? executablePath) => FamilyScope(executablePath).Root;
+
+    /// <summary>
+    /// What "this application's folder" covers for a signed family, across the application's updates.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The folder the executable was picked in, with the directory its updater renames read as "any
+    /// version of it". Three shapes:
+    /// </para>
+    /// <list type="bullet">
+    /// <item>No volatile directory: the executable's own directory, <c>Below</c> null.</item>
+    /// <item>The executable sits directly in a volatile directory - <c>Discord\app-1.0.9254\Discord.exe</c>,
+    /// <c>Codex\bin\247581e40ee272fb\codex.exe</c>: everything under the directory above it, which is
+    /// what schema 1's family did for Squirrel layouts, <c>Below</c> null.</item>
+    /// <item>The volatile directory is further up -
+    /// <c>cua_node\df473e5367fa2b42\bin\...\swift\x64\tool.exe</c>: the same subfolder in any version,
+    /// <c>Root</c> = <c>cua_node</c>, <c>Below</c> = <c>bin\...\swift\x64</c>. Climbing to
+    /// <c>cua_node</c> outright would also take in every other program of the bundle - the Node.js
+    /// runtime beside it - which is more than the person who ticked "include folder" asked for.</item>
+    /// </list>
+    /// <para>
+    /// A root that is a shared directory (ADR W-0003) is refused in favour of the executable's own
+    /// directory. The caller must still check <see cref="IsSafeFamilyRoot"/> on the result: the
+    /// executable's own directory can be shared too.
+    /// </para>
+    /// </remarks>
+    public static (string Root, string? Below) FamilyScope(string? executablePath)
+    {
+        var normalized = Normalize(executablePath);
+        var parent = Parent(normalized);
+
+        if (!TrySplitAtVolatileDirectory(normalized, out var root, out _, out var rest) || !IsSafeFamilyRoot(root))
+        {
+            return (parent, null);
+        }
+
+        var below = Parent(rest);
+        return (root, below.Length == 0 ? null : below);
+    }
+
+    /// <summary>
+    /// Whether a path lies inside a family scope: under <c>Root</c>, or under
+    /// <c>Root\&lt;volatile&gt;\Below</c> when <c>Below</c> is set.
+    /// </summary>
+    public static bool IsInFamilyScope(string candidatePath, string root, string? below)
+    {
+        if (!IsUnderFamilyRoot(candidatePath, root))
+        {
+            return false;
+        }
+
+        if (below is null)
+        {
+            return true;
+        }
+
+        var remainder = candidatePath[(root.TrimEnd('\\').Length + 1)..];
+        var separator = remainder.IndexOf('\\');
+        if (separator <= 0 || !IsVolatileDirectory(remainder[..separator]))
+        {
+            return false;
+        }
+
+        var inside = remainder[(separator + 1)..];
+        return inside.Length > below.Length + 1 &&
+               inside.StartsWith(below, StringComparison.OrdinalIgnoreCase) &&
+               inside[below.Length] == '\\';
+    }
+
+    /// <summary>
+    /// The nearest volatile directory above an executable, and the path below it.
+    /// </summary>
+    /// <remarks>
+    /// Used to look for an application that has moved on: <c>root\*\rest</c> is where a newer build of
+    /// <c>root\old\rest</c> would be. Returns false when the path has no volatile directory.
+    /// </remarks>
+    public static bool TrySplitAtVolatileDirectory(
+        string? executablePath, out string root, out string volatileSegment, out string rest)
+    {
+        root = volatileSegment = rest = string.Empty;
+        var normalized = Normalize(executablePath);
+        var cursor = Parent(normalized);
+
+        for (var step = 0; step < AncestorWalkLimit && !string.IsNullOrEmpty(cursor); step++)
+        {
+            var segment = LastSegment(cursor);
+            if (IsVolatileDirectory(segment))
+            {
+                root = Parent(cursor);
+                volatileSegment = segment;
+                rest = normalized[(cursor.Length + 1)..];
+                return root.Length > 0;
+            }
+
+            cursor = Parent(cursor);
+        }
+
+        return false;
+    }
+
+    private static bool IsHashDirectory(string segment)
+    {
+        if (segment.Length is < 8 or > 64)
+        {
+            return false;
+        }
+
+        var hasDigit = false;
+        var hasLetter = false;
+
+        foreach (var character in segment)
+        {
+            if (char.IsAsciiDigit(character))
+            {
+                hasDigit = true;
+            }
+            else if (char.IsAsciiHexDigit(character))
+            {
+                hasLetter = true;
+            }
+            else
+            {
+                return false;
+            }
+        }
+
+        return hasDigit && hasLetter;
+    }
+
+    private static bool IsGuidDirectory(string segment)
+    {
+        var trimmed = segment.Length == 38 && segment[0] == '{' && segment[^1] == '}' ? segment[1..^1] : segment;
+        return trimmed.Length == 36 && Guid.TryParseExact(trimmed, "D", out _);
+    }
+
     /// <summary>The last path segment of a normalised path.</summary>
     private static string LastSegment(string normalizedPath)
     {

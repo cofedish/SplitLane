@@ -36,6 +36,57 @@ public sealed class NatTableTests
         Assert.False(table.TryGet(51000, out _));
     }
 
+    [Theory]
+    [InlineData(NatVerdict.Block)]
+    [InlineData(NatVerdict.Pending)]
+    public void ARefusalIsRecordedAsARefusalNotAsLeaveAlone(NatVerdict verdict)
+    {
+        // A TCP Block used to be recorded as a plain "leave alone" and went out DIRECT.
+        var table = new NatTable();
+        var destination = IPAddress.Parse("93.184.216.34");
+
+        table.RecordVerdict(51000, destination, 443, verdict);
+
+        Assert.True(table.TryGetVerdict(51000, out var recorded, out var port, out var found));
+        Assert.Equal(verdict, found);
+        Assert.Equal(destination, recorded);
+        Assert.Equal(443, port);
+    }
+
+    [Fact]
+    public void ALeaveAloneDecisionStillReadsAsDirect()
+    {
+        var table = new NatTable();
+        table.RecordDirect(51000, IPAddress.Parse("93.184.216.34"), 443);
+
+        Assert.True(table.TryGetVerdict(51000, out _, out _, out var verdict));
+        Assert.Equal(NatVerdict.Direct, verdict);
+    }
+
+    [Fact]
+    public void AHeldConnectionIsResolvedOnlyWhileItIsStillTheOneHeld()
+    {
+        var table = new NatTable();
+        var destination = IPAddress.Parse("93.184.216.34");
+        table.RecordVerdict(51000, destination, 443, NatVerdict.Pending);
+
+        Assert.False(table.TryResolvePending(51000, IPAddress.Parse("10.0.0.1"), 443));
+        Assert.False(table.TryResolvePending(51000, destination, 80));
+        Assert.True(table.TryResolvePending(51000, destination, 443));
+        Assert.False(table.TryResolvePending(51000, destination, 443));
+    }
+
+    [Fact]
+    public void AClosedSocketIsNotResolvedIntoANewDecision()
+    {
+        var table = new NatTable();
+        var destination = IPAddress.Parse("93.184.216.34");
+        table.RecordVerdict(51000, destination, 443, NatVerdict.Pending);
+        table.Remove(51000);
+
+        Assert.False(table.TryResolvePending(51000, destination, 443));
+    }
+
     [Fact]
     public void RecordingTwiceOnAPortReplacesTheOlderEntry()
     {

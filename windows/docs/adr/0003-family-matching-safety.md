@@ -51,12 +51,31 @@ nothing in the UI would explain why.
 So `ExecutablePath.IsSafeFamilyRoot` refuses:
 
 - drive roots and UNC share roots;
-- `Windows`, `Windows\System32`, `Windows\SysWOW64`, `Windows\Temp`;
-- `Program Files`, `Program Files (x86)`, `ProgramData`, `Users`, `Temp`;
+- `Windows`, `Windows\System32`, `Windows\SysWOW64`, `Windows\SystemApps`, `Windows\Temp`;
+- `Program Files`, `Program Files (x86)`, `Program Files\WindowsApps`,
+  `Program Files (x86)\WindowsApps`, `ProgramData`, `Users`, `Temp`, `Tmp`;
 - per-user directories matched structurally — `Users\<name>` and below it `AppData`,
-  `AppData\Local`, `AppData\Roaming`, `AppData\Local\Programs`, `Desktop`, `Downloads`, `Documents`.
+  `AppData\Local`, `AppData\LocalLow`, `AppData\Roaming`, `AppData\Local\Programs`,
+  `AppData\Local\Temp`, `Desktop`, `Downloads`, `Documents`.
 
-`C:\Program Files\Codex` is safe. `C:\Program Files` is not.
+`C:\Program Files\Codex` is safe. `C:\Program Files` is not. `WindowsApps` is on the list because
+every packaged application on the machine installs under it; a single versioned package directory
+below it belongs to one application (ADR W-0010).
+
+The lists live in `ExecutablePath.SharedRoots` and `ExecutablePath.SharedUserRoots`; this record
+names them, the code is authoritative.
+
+### Signed families (W-0013)
+
+Since [W-0013](0013-match-applications-by-verified-identity.md) a rule for a signed application can
+also cover "the same publisher's binaries with the same product name", or the same folder in any
+version. The same guard applies to that folder: a signed family is never rooted at a shared
+directory. And the product name has the same hazard in a different form — every binary in
+`System32` is "Microsoft Windows Operating System", every Electron application that did not rename
+itself is "Electron" — so `ProductFamily` refuses product families for platform products (Windows,
+.NET, Electron, Node.js, OpenJDK, Python, PowerShell, WebView2) and for anything signed by the
+certificates Windows itself is signed with, whose product names are localised and cannot be listed.
+Family matching is refused outright for unsigned files.
 
 ### Defence in depth
 

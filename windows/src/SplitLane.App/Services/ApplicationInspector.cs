@@ -1,35 +1,49 @@
 using System.ComponentModel;
 using System.Diagnostics;
-using System.IO;
-using System.Security.Cryptography;
-using System.Security.Cryptography.X509Certificates;
+using SplitLane.Core.Configuration;
 using SplitLane.Core.Models;
 using SplitLane.Core.Rules;
+using SplitLane.Platform;
 
 namespace SplitLane.App.Services;
 
 /// <summary>One application the user could select.</summary>
-/// <param name="Identity">What SplitLane would record about it.</param>
+/// <param name="Path">Normalised path of the executable.</param>
+/// <param name="DisplayName">Name for the list.</param>
+/// <param name="PackageFamilyName">
+/// Package family read from a running process's token, or null for an unpackaged one.
+/// </param>
 /// <param name="ProcessCount">How many of its processes are running right now.</param>
-public sealed record ApplicationCandidate(AppIdentity Identity, int ProcessCount)
+/// <remarks>
+/// Deliberately not an <see cref="AppIdentity"/>. The scan does not verify signatures, so it does not
+/// know what the application is - only where it is running from. An identity built here would be a
+/// path identity, which is exactly the kind of rule that stopped matching after every update.
+/// </remarks>
+public sealed record ApplicationCandidate(string Path, string DisplayName, string? PackageFamilyName, int ProcessCount)
 {
-    /// <summary>Name for the list.</summary>
-    public string DisplayName => Identity.DisplayName;
-
-    /// <summary>Path, for the second line.</summary>
-    public string Path => Identity.ExecutablePath;
-
-    /// <summary>Publisher, or a plain statement that there is none.</summary>
-    public string PublisherLabel => Identity.Publisher ?? "Unsigned";
-
-    /// <summary>Whether the executable carries a valid Authenticode signature.</summary>
-    public bool IsSigned => Identity.Publisher is not null;
-
     /// <summary>How many processes this executable currently has, for the picker.</summary>
     public string ProcessLabel => ProcessCount == 1 ? "1 process" : $"{ProcessCount} processes";
 
     /// <summary>Whether there is a process count worth showing.</summary>
     public bool HasProcesses => ProcessCount > 0;
+
+    /// <summary>The package family, from the token or failing that from a WindowsApps path; or empty.</summary>
+    public string PackageFamily => !string.IsNullOrEmpty(PackageFamilyName)
+        ? PackageFamilyName
+        : PackagePath.Family(Path);
+}
+
+/// <summary>
+/// What SplitLane would record for a file the user picked: an identity, or the reason there is none.
+/// </summary>
+/// <param name="Path">The file, normalised.</param>
+/// <param name="DisplayName">Name to show, including in the refusal.</param>
+/// <param name="Identity">The identity to record, or null when the file cannot be added.</param>
+/// <param name="Refusal">Why it cannot be added, in words for the user; null when it can.</param>
+public sealed record ApplicationDescription(string Path, string DisplayName, AppIdentity? Identity, string? Refusal)
+{
+    /// <summary>Whether a rule can be made from this.</summary>
+    public bool CanBeAdded => Identity is not null;
 }
 
 /// <summary>
@@ -37,39 +51,42 @@ public sealed record ApplicationCandidate(AppIdentity Identity, int ProcessCount
 /// </summary>
 /// <remarks>
 /// <para>
-/// This is where the Windows equivalent of "pick an app" lives. macOS reads a code signing identifier
-/// out of a bundle; here the routing key is the image path, and the publisher is read from the
-/// Authenticode certificate for display and for the hardening path.
+/// This is where the Windows equivalent of "pick an app" lives. The identity recorded here is what
+/// the engine compares a process against for as long as the rule exists, so it is built from the same
+/// evidence the engine builds - <see cref="WindowsImageInspector"/>, linked into both - and by the
+/// same function, <see cref="ConfigurationMigrator.IdentityFor"/>.
 /// </para>
 /// <para>
-/// Signature verification is a chain build that can touch the network for revocation, so it is done
-/// once at pick time and cached — never on the routing path, which is exactly why the engine matches
-/// on the path and not the signature.
+/// It used to read the publisher with <c>X509Certificate.CreateFromSignedFile</c>, which extracts the
+/// certificate without checking that the signature covers the file, and cut the common name at the
+/// first comma - <c>CN="OpenAI OpCo, LLC"</c> became <c>OpenAI OpCo</c>. A publisher recorded that way
+/// was never evidence of anything, which is why it could only ever be shown and never matched on.
 /// </para>
 /// </remarks>
 public static class ApplicationInspector
 {
-    private static readonly Dictionary<string, string?> PublisherCache =
-        new(ExecutablePath.Comparer);
-
     /// <summary>
     /// Lists the distinct applications with a visible window or a network-capable process.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Grouped by executable, because ten Chrome processes are one application to a user, and the
-    /// routing key is the executable anyway.
+    /// Grouped by executable, because ten Chrome processes are one application to a user.
     /// </para>
     /// <para>
-    /// The signature is deliberately <b>not</b> read here. Verifying Authenticode builds a
-    /// certificate chain, which can block on a revocation check, and doing it for every process on
-    /// the machine turned opening the picker into a visible multi-second stall. It is read once, for
-    /// the one application the user actually picks.
+    /// The signature is deliberately <b>not</b> read here. Verifying Authenticode hashes the whole
+    /// file, and doing it for every process on the machine turned opening the picker into a visible
+    /// multi-second stall. It is read once, for the one application the user actually picks.
+    /// </para>
+    /// <para>
+    /// The package family <i>is</i> read, because it is cheap - one token query - and only a running
+    /// process has it. A packaged application installed on another drive has no <c>WindowsApps</c> in
+    /// its path, so the path alone would record it as an ordinary signed program, and the rule would
+    /// then match its files rather than its package.
     /// </para>
     /// </remarks>
     public static IReadOnlyList<ApplicationCandidate> RunningApplications()
     {
-        var byPath = new Dictionary<string, (string Name, int Count)>(ExecutablePath.Comparer);
+        var byPath = new Dictionary<string, (string Name, string? Package, int Count)>(ExecutablePath.Comparer);
 
         foreach (var process in Process.GetProcesses())
         {
@@ -87,17 +104,16 @@ public static class ApplicationInspector
                     continue;
                 }
 
-                var name = string.IsNullOrWhiteSpace(process.MainWindowTitle)
-                    ? process.ProcessName
-                    : process.ProcessName;
-
                 if (byPath.TryGetValue(normalized, out var existing))
                 {
-                    byPath[normalized] = (existing.Name, existing.Count + 1);
+                    // Every process of one packaged executable carries the same family; asking again
+                    // is only worth it while none of them has answered.
+                    var package = existing.Package ?? ProcessPackage.FamilyName((uint)process.Id);
+                    byPath[normalized] = (existing.Name, package, existing.Count + 1);
                 }
                 else
                 {
-                    byPath[normalized] = (name, 1);
+                    byPath[normalized] = (process.ProcessName, ProcessPackage.FamilyName((uint)process.Id), 1);
                 }
             }
             catch (Win32Exception)
@@ -116,128 +132,83 @@ public static class ApplicationInspector
 
         return [.. byPath
             .Select(pair => new ApplicationCandidate(
-                Describe(pair.Key, pair.Value.Name, readPublisher: false), pair.Value.Count))
+                pair.Key, DisplayNameFor(pair.Key, pair.Value.Name), pair.Value.Package, pair.Value.Count))
             .OrderBy(candidate => candidate.DisplayName, StringComparer.OrdinalIgnoreCase)];
     }
 
-    /// <summary>Builds an identity for an executable on disk.</summary>
+    /// <summary>
+    /// Reads a file and works out the identity a rule for it would record.
+    /// </summary>
     /// <param name="executablePath">Full path of the executable.</param>
     /// <param name="fallbackName">Name to use when the version resource has none.</param>
-    /// <param name="readPublisher">
-    /// Whether to verify the Authenticode signature. False for bulk enumeration, where the cost is
-    /// paid once per process on the machine and the answer is not shown.
+    /// <param name="packageFamilyName">
+    /// The package family of a running process picked from the list, read from its token. Null for a
+    /// file picked from disk, where the path is all there is to go on.
     /// </param>
-    public static AppIdentity Describe(
-        string executablePath, string? fallbackName = null, bool readPublisher = true)
-    {
-        var normalized = ExecutablePath.Normalize(executablePath);
-        string? description = null;
-        string? product = null;
-
-        try
-        {
-            if (File.Exists(normalized))
-            {
-                var info = FileVersionInfo.GetVersionInfo(normalized);
-                description = Trimmed(info.FileDescription);
-                product = Trimmed(info.ProductName);
-            }
-        }
-        catch (IOException)
-        {
-        }
-        catch (UnauthorizedAccessException)
-        {
-        }
-
-        var name = product
-            ?? description
-            ?? Trimmed(fallbackName)
-            ?? ExecutablePath.FileName(normalized);
-
-        return new AppIdentity
-        {
-            ExecutablePath = normalized,
-            DisplayName = name,
-            FileDescription = description,
-            Publisher = readPublisher ? ReadPublisher(normalized) : null,
-            PackageFamilyName = null,
-        };
-    }
-
-    /// <summary>
-    /// Reads the Authenticode subject of an executable, or null when it has none that verifies.
-    /// </summary>
     /// <remarks>
-    /// The result is cached per path. Building a certificate chain is expensive and can block on a
-    /// revocation check, and the picker calls this once per candidate.
+    /// Slow: it verifies the Authenticode signature and hashes the file, a full read each - about a
+    /// second and a half for a 320 MB executable read cold. Call it off the UI thread.
     /// </remarks>
-    public static string? ReadPublisher(string executablePath)
+    public static ApplicationDescription Describe(
+        string executablePath, string? fallbackName = null, string? packageFamilyName = null)
     {
-        var normalized = ExecutablePath.Normalize(executablePath);
+        var path = ExecutablePath.Normalize(executablePath);
+        var (product, _, description) = ImageFile.ReadVersion(path);
+        var name = product ?? description ?? Trimmed(fallbackName) ?? ExecutablePath.FileName(path);
 
-        lock (PublisherCache)
+        var package = Trimmed(packageFamilyName);
+        var evidence = WindowsImageInspector.Read(path, computeSha256: true);
+
+        if (evidence is null)
         {
-            if (PublisherCache.TryGetValue(normalized, out var cached))
+            // A packaged application is recognised by its package, which the token or the path has
+            // already given; its file does not have to be readable. Anything else cannot be told apart
+            // from any other program without reading it.
+            if (package is null && PackagePath.Family(path).Length == 0)
             {
-                return cached;
+                return new ApplicationDescription(path, name, null, Unreadable(name, path));
             }
+
+            evidence = ImageEvidence.FromPath(path);
         }
 
-        string? publisher = null;
-
-        try
+        if (package is not null)
         {
-            if (File.Exists(normalized))
-            {
-                // CreateFromSignedFile, not the certificate loaders. The loaders expect a
-                // certificate file; an Authenticode signature is embedded in the PE, and asking
-                // them to read an .exe throws — which silently labelled every signed binary on the
-                // machine "Unsigned".
-#pragma warning disable SYSLIB0057 // The Authenticode extraction path has no modern replacement.
-                using var certificate = new X509Certificate2(X509Certificate.CreateFromSignedFile(normalized));
-#pragma warning restore SYSLIB0057
-                publisher = SimpleName(certificate.Subject);
-            }
-        }
-        catch (CryptographicException)
-        {
-            // Unsigned, which is a normal and common answer.
-        }
-        catch (IOException)
-        {
-        }
-        catch (UnauthorizedAccessException)
-        {
+            evidence = evidence with { PackageFamilyName = package };
         }
 
-        lock (PublisherCache)
-        {
-            PublisherCache[normalized] = publisher;
-        }
-
-        return publisher;
+        var identity = ConfigurationMigrator.IdentityFor(path, name, evidence, description);
+        return identity is null
+            ? new ApplicationDescription(path, name, null, Unrecognisable(name, path, evidence))
+            : new ApplicationDescription(path, name, identity, null);
     }
 
-    /// <summary>Pulls the CN out of a distinguished name, falling back to the whole string.</summary>
-    private static string? SimpleName(string subject)
+    /// <summary>The name the picker shows before anything has been verified.</summary>
+    private static string DisplayNameFor(string path, string processName)
     {
-        if (string.IsNullOrWhiteSpace(subject))
-        {
-            return null;
-        }
-
-        foreach (var part in subject.Split(','))
-        {
-            var trimmed = part.Trim();
-            if (trimmed.StartsWith("CN=", StringComparison.OrdinalIgnoreCase))
-            {
-                return trimmed[3..].Trim('"');
-            }
-        }
-
-        return subject;
+        var (product, _, description) = ImageFile.ReadVersion(path);
+        return product ?? description ?? Trimmed(processName) ?? ExecutablePath.FileName(path);
     }
+
+    private static string Unreadable(string name, string path) =>
+        $"{name} could not be added: {path} could not be opened. It may be in the middle of an " +
+        "update, or it may not be readable from your account. Try again in a moment.";
+
+    /// <summary>Why <see cref="ConfigurationMigrator.IdentityFor"/> refused a file, in the user's terms.</summary>
+    private static string Unrecognisable(string name, string path, ImageEvidence evidence) => evidence.Signature switch
+    {
+        SignatureStatus.Invalid =>
+            $"{name} could not be added: the signature on {path} does not verify. The file was changed " +
+            "after it was signed, or its certificate is not trusted on this machine, so SplitLane cannot " +
+            "tell which program it is — and a rule for it could be claimed by any file with the same " +
+            "broken signature.",
+        SignatureStatus.Valid =>
+            $"{name} could not be added: the signature on {path} verifies but names no publisher " +
+            "SplitLane can recognise it by.",
+        _ =>
+            $"{name} could not be added: {path} is not signed, and it could not be read in full to " +
+            "record which file it is. Try again in a moment.",
+    };
 
     private static string? Trimmed(string? value)
         => string.IsNullOrWhiteSpace(value) ? null : value.Trim();

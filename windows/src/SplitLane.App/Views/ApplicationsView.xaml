@@ -12,6 +12,7 @@
         <Grid>
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
                 <RowDefinition Height="*" />
             </Grid.RowDefinitions>
 
@@ -39,23 +40,38 @@
             </Grid>
 
             <!--
-                A rule whose executable is gone matches nothing, so the application it names is
-                quietly going DIRECT. Nothing else in the interface would report that, which is
-                exactly what makes it worth a banner rather than a subtle mark.
+                Its own row. It used to share the header's, bottom-aligned, which drew it over the
+                summary and the filter box the moment it appeared.
             -->
-            <Border Grid.Row="0" Margin="0,0,10,16" Padding="15,12" CornerRadius="10"
-                    VerticalAlignment="Bottom"
-                    Background="{DynamicResource WarningTintBrush}"
-                    BorderBrush="{DynamicResource WarningBrush}" BorderThickness="1"
-                    Visibility="{Binding HasStaleRules, Converter={StaticResource BoolToVisible}}">
-                <TextBlock Text="{Binding StaleSummary}"
-                           AutomationProperties.AutomationId="StaleRulesBanner"
-                           FontSize="12.5" TextWrapping="Wrap"
-                           Foreground="{DynamicResource TextBrush}" />
-            </Border>
+            <StackPanel Grid.Row="1">
+                <!--
+                    A rule that matches nothing leaves the application it names quietly going DIRECT,
+                    and one whose file has been replaced has its connections refused. Nothing else in
+                    the interface would report either, which is exactly what makes them worth a banner
+                    rather than a subtle mark.
+                -->
+                <Border Margin="0,0,10,16" Padding="15,12" CornerRadius="10"
+                        Background="{DynamicResource WarningTintBrush}"
+                        BorderBrush="{DynamicResource WarningBrush}" BorderThickness="1"
+                        Visibility="{Binding HasStaleRules, Converter={StaticResource BoolToVisible}}">
+                    <TextBlock Text="{Binding StaleSummary}"
+                               AutomationProperties.AutomationId="StaleRulesBanner"
+                               FontSize="12.5" TextWrapping="Wrap"
+                               Foreground="{DynamicResource TextBrush}" />
+                </Border>
+
+                <!--
+                    Until conversion finishes the rows still show the old rules and their old warnings;
+                    saying so is what makes those warnings disappearing read as a fix, not a flicker.
+                -->
+                <TextBlock Margin="0,0,10,16" Style="{StaticResource BodyText}" FontSize="12.5"
+                           AutomationProperties.AutomationId="MigrationStatus"
+                           Text="Checking rules recorded by path, so they can recognise their applications by signature or package instead…"
+                           Visibility="{Binding IsMigrating, Converter={StaticResource BoolToVisible}}" />
+            </StackPanel>
 
             <!-- Empty state -->
-            <Border Grid.Row="1" Style="{StaticResource Card}" Padding="40" VerticalAlignment="Top"
+            <Border Grid.Row="2" Style="{StaticResource Card}" Padding="40" VerticalAlignment="Top"
                     Margin="0,0,10,0"
                     Visibility="{Binding IsEmpty, Converter={StaticResource BoolToVisible}}">
                 <StackPanel HorizontalAlignment="Center">
@@ -65,7 +81,7 @@
                                HorizontalAlignment="Center" />
                     <TextBlock Style="{StaticResource BodyText}" MaxWidth="440" TextAlignment="Center"
                                Margin="0,10,0,0" HorizontalAlignment="Center"
-                               Text="Every application on this machine is currently DIRECT. Add one to route it through the proxy — the rest stay untouched." />
+                               Text="Every application on this machine is currently DIRECT. Add one to route it through the proxy — everything else is left alone, its traffic passed through unmodified." />
                     <Button Content="Add application" Style="{StaticResource PrimaryButton}"
                             HorizontalAlignment="Center" Margin="0,20,0,0"
                             AutomationProperties.AutomationId="AddApplicationEmptyButton"
@@ -73,7 +89,7 @@
                 </StackPanel>
             </Border>
 
-            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="0,0,10,0"
+            <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto" Padding="0,0,10,0"
                           Visibility="{Binding IsEmpty, Converter={StaticResource BoolToCollapsed}}">
                 <ItemsControl ItemsSource="{Binding VisibleRules}" Margin="0,0,0,28">
                     <ItemsControl.ItemTemplate>
@@ -109,47 +125,99 @@
                                                    ToolTip="{Binding ExecutablePath}" />
 
                                         <!--
-                                            A Grid, not a horizontal StackPanel. A StackPanel hands
-                                            its children infinite width, so TextTrimming never
-                                            engages and the summary ran underneath the controls
-                                            beside it instead of ellipsing.
+                                            How the application is recognised, then what the rule
+                                            covers: the first is what survives an update, the second
+                                            is what the Helpers box changes. The publisher is part of
+                                            the first line now, in full - it used to be a badge of its
+                                            own, cut at the first comma.
                                         -->
-                                        <Grid Margin="0,10,0,0">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="Auto" />
-                                                <ColumnDefinition Width="*" />
-                                            </Grid.ColumnDefinitions>
+                                        <TextBlock Text="{Binding IdentitySummary}"
+                                                   AutomationProperties.AutomationId="RuleIdentity"
+                                                   FontSize="11.5" Margin="0,10,0,0"
+                                                   Foreground="{DynamicResource TextMutedBrush}"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   ToolTip="{Binding IdentityDetail}" />
 
-                                            <Border Grid.Column="0" Background="{DynamicResource SurfaceRaisedBrush}"
-                                                    CornerRadius="4" Padding="7,3" VerticalAlignment="Center">
-                                                <TextBlock Text="{Binding PublisherLabel}" FontSize="11"
-                                                           Foreground="{DynamicResource TextMutedBrush}"
-                                                           MaxWidth="240" TextTrimming="CharacterEllipsis" />
-                                            </Border>
+                                        <TextBlock Text="{Binding MatchSummary}"
+                                                   FontSize="11.5" Margin="0,3,0,0"
+                                                   Foreground="{DynamicResource TextFaintBrush}"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   ToolTip="{Binding MatchTooltip}" />
 
-                                            <TextBlock Grid.Column="1" Text="{Binding MatchSummary}"
-                                                       FontSize="11.5"
-                                                       Foreground="{DynamicResource TextFaintBrush}"
-                                                       VerticalAlignment="Center" Margin="10,0,0,0"
-                                                       TextTrimming="CharacterEllipsis"
-                                                       ToolTip="{Binding MatchTooltip}" />
-                                        </Grid>
-
-                                        <!-- W-4: the path will change, or already has. -->
+                                        <!--
+                                            W-4, and what replaced most of it: the one most important
+                                            thing about this rule. Tinted by how much it matters - a
+                                            note on what migration did is not a warning, and a rule
+                                            that matches nothing is more than one.
+                                        -->
                                         <Border Margin="0,10,0,0" Padding="10,7" CornerRadius="7"
-                                                Background="{DynamicResource WarningTintBrush}"
-                                                Visibility="{Binding HasWarning,
+                                                Visibility="{Binding HasAdvice,
                                                              Converter={StaticResource BoolToVisible}}">
-                                            <StackPanel Orientation="Horizontal">
-                                                <Ellipse Width="6" Height="6" VerticalAlignment="Top"
-                                                         Margin="0,6,9,0"
-                                                         Fill="{DynamicResource WarningBrush}" />
-                                                <TextBlock Text="{Binding WarningText}"
+                                            <Border.Style>
+                                                <Style TargetType="Border">
+                                                    <Setter Property="Background" Value="{DynamicResource WarningTintBrush}" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding Attention}"
+                                                                     Value="{x:Static vm:RuleAttention.Note}">
+                                                            <Setter Property="Background" Value="{DynamicResource AccentTintBrush}" />
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding Attention}"
+                                                                     Value="{x:Static vm:RuleAttention.Stopped}">
+                                                            <Setter Property="Background" Value="{DynamicResource BlockedTintBrush}" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Border.Style>
+
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+
+                                                <Ellipse Grid.Column="0" Width="6" Height="6" VerticalAlignment="Top"
+                                                         Margin="0,6,9,0">
+                                                    <Ellipse.Style>
+                                                        <Style TargetType="Ellipse">
+                                                            <Setter Property="Fill" Value="{DynamicResource WarningBrush}" />
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding Attention}"
+                                                                             Value="{x:Static vm:RuleAttention.Note}">
+                                                                    <Setter Property="Fill" Value="{DynamicResource AccentBrush}" />
+                                                                </DataTrigger>
+                                                                <DataTrigger Binding="{Binding Attention}"
+                                                                             Value="{x:Static vm:RuleAttention.Stopped}">
+                                                                    <Setter Property="Fill" Value="{DynamicResource BlockedBrush}" />
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Ellipse.Style>
+                                                </Ellipse>
+
+                                                <TextBlock Grid.Column="1" Text="{Binding AdviceText}"
                                                            AutomationProperties.AutomationId="RuleWarning"
                                                            FontSize="11.5" TextWrapping="Wrap"
                                                            Foreground="{DynamicResource TextMutedBrush}"
-                                                           MaxWidth="520" />
-                                            </StackPanel>
+                                                           MaxWidth="520" HorizontalAlignment="Left"
+                                                           VerticalAlignment="Center" />
+
+                                                <!--
+                                                    Beside the sentence that asks for it, not with the
+                                                    row's other controls: it is the remedy for this
+                                                    message, and it goes when the message does.
+                                                -->
+                                                <Button Grid.Column="2" Content="Select again"
+                                                        Style="{StaticResource QuietButton}"
+                                                        Padding="12,6" Margin="12,0,0,0"
+                                                        VerticalAlignment="Center"
+                                                        AutomationProperties.AutomationId="ReselectButton"
+                                                        Visibility="{Binding CanReselect,
+                                                                     Converter={StaticResource BoolToVisible}}"
+                                                        Command="{Binding DataContext.ReselectCommand,
+                                                                  RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                        CommandParameter="{Binding}" />
+                                            </Grid>
                                         </Border>
                                     </StackPanel>
 

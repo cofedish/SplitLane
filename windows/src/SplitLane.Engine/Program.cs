@@ -13,6 +13,18 @@ internal static class Program
 
     private static async Task<int> Main(string[] args)
     {
+        // Before anything else, and before any log sink: a diagnostic run must not append to the
+        // service's log or create anything on disk, and it needs no elevation.
+        if (args.Contains("--explain", StringComparer.OrdinalIgnoreCase))
+        {
+            return IdentityExplainer.Run(args, Console.Out);
+        }
+
+        if (args.Contains("--describe", StringComparer.OrdinalIgnoreCase))
+        {
+            return IdentityExplainer.DescribeFile(args, Console.Out);
+        }
+
         var options = ParseOptions(args);
         var asService = args.Contains("--service", StringComparer.OrdinalIgnoreCase);
 
@@ -82,9 +94,10 @@ internal static class Program
         EnableDivert: !args.Contains("--no-divert", StringComparer.OrdinalIgnoreCase),
         Verbose: args.Contains("--verbose", StringComparer.OrdinalIgnoreCase),
 
-        // Loopback stays the default because it is the shape the design and the documentation
-        // describe. It does not currently deliver; --redirect-local selects the alternative while
-        // that is being worked out, rather than making an unproven change the default.
+        // Loopback is the default because it is the shape verified on a live machine. --redirect-local
+        // keeps the other shape - destination moved to the machine's own address - reachable for
+        // diagnosis (verify-divert.ps1 -Mode local). It does not deliver: a physical interface
+        // rejects its packets as spoofed.
         UseLoopbackRedirect: !args.Contains("--redirect-local", StringComparer.OrdinalIgnoreCase),
         TraceRedirects: args.Contains("--trace", StringComparer.OrdinalIgnoreCase));
 

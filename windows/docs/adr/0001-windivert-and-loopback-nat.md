@@ -1,6 +1,8 @@
 # ADR W-0001 — Intercept with WinDivert and redirect through a loopback NAT
 
-**Status:** accepted
+**Status:** accepted; superseded in part by [W-0009](0009-ship-the-driver-in-the-package.md), which
+ships the driver in the package, fetched at build time against a pinned SHA-256. The choice of
+WinDivert and the loopback NAT stand.
 **Date:** 2026-08-20
 **Supersedes on Windows:** ADR 0001 (use a transparent proxy provider)
 
@@ -54,14 +56,17 @@ a packet addressed `192.168.1.5 → 127.0.0.1` is a martian and the stack drops 
 
 **Accepted:** every outbound packet on the machine transits user mode while routing is active. This
 is the largest behavioural difference from macOS and is stated plainly in the README, in the
-Settings page, and in the threat model as W-1. Handles are closed when nothing needs routing, and
-loopback is excluded from the outbound filter, which removes the majority of traffic on a developer
-machine.
+Settings page, and in the threat model as W-1. Loopback is excluded from the outbound filter, which
+removes the majority of traffic on a developer machine. The handles are *not* closed when nothing
+needs routing: they stay open while routing is paused and while no rule selects anything, and only
+stopping routing closes them. An earlier version of this record said otherwise.
 
-**Accepted:** SplitLane depends on a third-party kernel driver it does not ship. `fetch-windivert.ps1`
-downloads it and prints its hash for the user to verify; the repository does not vendor it, because
-committing a driver binary is a supply-chain decision that should not be inherited by everyone who
-clones.
+**Accepted:** SplitLane depends on a third-party kernel driver. The repository does not vendor it,
+because committing a driver binary is a supply-chain decision that should not be inherited by
+everyone who clones; `fetch-windivert.ps1` is how a source checkout gets one. **Superseded for the
+product by W-0009:** the installer and the portable archive ship the driver and its licence, fetched
+during packaging against a pinned SHA-256, because an installed product that has to be sent to a
+script before it works is not installed.
 
 **Accepted:** correctness now depends on packet arithmetic — address rewriting and checksums — that
 fails silently when wrong. Mitigated by keeping that arithmetic in pure functions over a buffer

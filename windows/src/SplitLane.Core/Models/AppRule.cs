@@ -3,30 +3,50 @@ using System.Text.Json.Serialization;
 namespace SplitLane.Core.Models;
 
 /// <summary>
-/// How strictly a rule's executable path must match the one on a flow.
+/// How much of an application a rule covers.
 /// </summary>
+/// <remarks>
+/// What each mode compares depends on the identity's <see cref="IdentityKind"/>; the stored values
+/// are the ones schema 1 used, so an old configuration keeps its meaning.
+/// </remarks>
 public enum MatchMode
 {
-    /// <summary>Match only this exact executable.</summary>
+    /// <summary>Match only this executable.</summary>
     /// <remarks>
+    /// <para>
+    /// For a signed application: this file name, signed by this publisher, with this product name -
+    /// wherever it is installed and whatever version it is. For a packaged one: this file name in
+    /// this package family. For an unsigned one: these exact bytes. For a schema 1 path rule: this
+    /// path.
+    /// </para>
+    /// <para>
     /// On Windows this is far more often sufficient than the macOS equivalent, because Chromium and
     /// Electron helpers are the <i>same</i> binary re-launched with <c>--type=renderer</c> rather
     /// than a separate bundle. An exact rule on <c>chrome.exe</c> already covers every renderer.
+    /// </para>
     /// </remarks>
     Exact = 0,
 
     /// <summary>
-    /// Match this executable and anything else under its install directory.
+    /// Match this executable and the rest of its application.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// The default, and not merely a convenience: applications that ship a separate networking
     /// helper, an updater, or a sandboxed child in a subdirectory would otherwise produce a rule
-    /// that never matches the process actually opening the socket. Cutting on the path-separator
-    /// boundary is what keeps this from over-matching a sibling directory with a shared prefix.
-    ///
+    /// that never matches the process actually opening the socket.
+    /// </para>
     /// <para>
-    /// Refused, and downgraded to <see cref="Exact"/> by the validator, when the install directory
-    /// is a shared one such as <c>C:\Windows\System32</c>. See ADR W-0003.
+    /// For a signed application the rest is the same publisher's binaries that either carry the same
+    /// product name or live under the same install directory, above any version or hash directory
+    /// (<see cref="Rules.ExecutablePath.InstallRoot"/>). A file there that is unsigned, or signed by
+    /// someone else, is not part of it. For a packaged application the rest is the package. For a
+    /// schema 1 path rule it is everything under the directory, cut on the separator.
+    /// </para>
+    /// <para>
+    /// Refused, and downgraded to <see cref="Exact"/> by the validator, for an unsigned application
+    /// and when the install directory is a shared one such as <c>C:\Windows\System32</c> with no
+    /// product name to fall back on. See ADR W-0003 and ADR W-0013.
     /// </para>
     /// </remarks>
     ExecutableFamily = 1,
@@ -50,6 +70,25 @@ public enum MatchMode
     PackageFamily = 2,
 }
 
+/// <summary>Whether a rule can take part in routing, or is waiting for the user.</summary>
+public enum RuleStatus
+{
+    /// <summary>The rule routes.</summary>
+    Active = 0,
+
+    /// <summary>
+    /// SplitLane could not establish what application this rule means, and will not guess.
+    /// </summary>
+    /// <remarks>
+    /// Produced by migration when a schema 1 rule names a file that is gone and no newer build of the
+    /// same publisher's application can be found in its place, or a file whose signature no longer
+    /// names the publisher the rule was made for. The rule routes nothing - neither to the proxy nor,
+    /// by being mistaken for another application, anywhere else - and the interface says so and offers
+    /// to pick the application again. See <see cref="AppRule.StatusDetail"/>.
+    /// </remarks>
+    NeedsReselection = 1,
+}
+
 /// <summary>
 /// A user-configured routing rule: "this application belongs in this lane".
 /// </summary>
@@ -68,7 +107,7 @@ public sealed record AppRule
     /// </remarks>
     public RouteAction Action { get; init; } = RouteAction.Proxy;
 
-    /// <summary>How the path is matched.</summary>
+    /// <summary>How much of the application the rule covers.</summary>
     public MatchMode MatchMode { get; init; } = MatchMode.ExecutableFamily;
 
     /// <summary>
@@ -84,7 +123,27 @@ public sealed record AppRule
     /// <summary>Optional user note, shown in the Applications list.</summary>
     public string? Note { get; init; }
 
-    /// <summary>Stable identity, equal to the routing key.</summary>
+    /// <summary>Whether the rule can route, or needs the user first.</summary>
+    public RuleStatus Status { get; init; } = RuleStatus.Active;
+
+    /// <summary>
+    /// What happened to this rule that the user should know: why it needs re-selecting, or what a
+    /// migration changed about it. Plain language, shown in the Applications list.
+    /// </summary>
+    public string? StatusDetail { get; init; }
+
+    /// <summary>
+    /// Whether the rule comes from the machine's managed policy rather than the user.
+    /// </summary>
+    /// <remarks>
+    /// Set only by <see cref="Configuration.PolicyMerger"/>, never read from a document: it is not part
+    /// of the JSON contract, so a user who writes <c>"isManaged": true</c> into their own configuration
+    /// has it read past, and their rule stays theirs.
+    /// </remarks>
+    [JsonIgnore]
+    public bool IsManaged { get; init; }
+
+    /// <summary>Stable identity, equal to the path the application was picked from.</summary>
     [JsonIgnore]
     public string Id => Identity.ExecutablePath;
 
@@ -92,17 +151,26 @@ public sealed record AppRule
     [JsonIgnore]
     public RouteAction EffectiveAction => IsEnabled ? Action : RouteAction.Direct;
 
+    /// <summary>Whether the rule is enabled and not waiting to be re-selected.</summary>
+    [JsonIgnore]
+    public bool ParticipatesInRouting => IsEnabled && Status == RuleStatus.Active;
+
     /// <summary>
     /// Whether family matching is both requested and permitted.
     /// </summary>
     /// <remarks>
-    /// A rule can ask for family matching on a shared directory; it does not get it. The snapshot
-    /// consults this rather than <see cref="MatchMode"/> so that a configuration written by an older
-    /// build, or hand-edited, cannot smuggle <c>C:\Windows\System32</c> into the family table.
+    /// A rule can ask for family matching on a shared directory, or on an unsigned file; it does not
+    /// get it. The snapshot consults this rather than <see cref="MatchMode"/> so that a configuration
+    /// written by an older build, or hand-edited, cannot smuggle <c>C:\Windows\System32</c> - or a
+    /// folder anyone can drop a file into - into the family tables.
     /// </remarks>
     [JsonIgnore]
-    public bool UsesFamilyMatching =>
-        MatchMode == MatchMode.ExecutableFamily && Identity.SupportsFamilyMatching;
+    public bool UsesFamilyMatching => Identity.Kind switch
+    {
+        IdentityKind.Signed => MatchMode != MatchMode.Exact && Identity.SupportsFamilyMatching,
+        IdentityKind.Path => MatchMode == MatchMode.ExecutableFamily && Identity.SupportsFamilyMatching,
+        _ => false,
+    };
 
     /// <summary>Whether package matching is both requested and possible.</summary>
     /// <remarks>
@@ -114,14 +182,18 @@ public sealed record AppRule
     /// <see cref="MatchMode.ExecutableFamily"/> counts too, for a packaged application. It means the
     /// same thing the user meant when they asked for it - cover the rest of this application, not
     /// only the file I picked - and for a packaged application the install directory cannot deliver
-    /// that: it is shared with every other packaged application, so family matching is refused and
-    /// the rule quietly narrows to the one version installed at the time. Reading the request as the
-    /// one mechanism that can honour it also means rules written before this existed start working
-    /// rather than waiting to be re-made.
+    /// that: the directory is named after the version, so a family rooted there covers one version
+    /// and is left behind by the next update, and the directory above it is <c>WindowsApps</c>, which
+    /// W-0003 refuses. Reading the request as the one mechanism that can honour it also means rules
+    /// written before package matching existed started working rather than waiting to be re-made.
     /// </para>
     /// </remarks>
     [JsonIgnore]
-    public bool UsesPackageMatching =>
-        MatchMode is MatchMode.PackageFamily or MatchMode.ExecutableFamily &&
-        Identity.SupportsPackageMatching;
+    public bool UsesPackageMatching => Identity.Kind switch
+    {
+        IdentityKind.Package => MatchMode != MatchMode.Exact,
+        IdentityKind.Path => MatchMode is MatchMode.PackageFamily or MatchMode.ExecutableFamily &&
+                             Identity.SupportsPackageMatching,
+        _ => false,
+    };
 }

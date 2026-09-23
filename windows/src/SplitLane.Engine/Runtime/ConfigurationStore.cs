@@ -26,26 +26,67 @@ namespace SplitLane.Engine.Runtime;
 public sealed class ConfigurationStore
 {
     private const string LogCategory = "config";
+
+    /// <summary>
+    /// The largest configuration read. A thousand rules with every identity field is under a megabyte.
+    /// </summary>
+    internal const long MaxConfigurationBytes = 8 * 1024 * 1024;
     private readonly Lock _gate = new();
 
     /// <summary>Builds a store over the standard paths.</summary>
     public ConfigurationStore()
-        : this(SplitLanePaths.ConfigurationFile, SplitLanePaths.CredentialFile)
+        : this(SplitLanePaths.ConfigurationFile, SplitLanePaths.CredentialFile, SplitLanePaths.LegacyConfigurationFile)
     {
     }
 
-    /// <summary>Builds a store over explicit paths. Used by tests.</summary>
-    public ConfigurationStore(string configurationPath, string credentialPath)
+    /// <summary>Builds a store over explicit paths. Used by tests and by <c>--explain --config</c>.</summary>
+    /// <param name="configurationPath">The schema 2 document, read and written.</param>
+    /// <param name="credentialPath">The protected credential.</param>
+    /// <param name="legacyConfigurationPath">The schema 1 document, read only; null for none.</param>
+    public ConfigurationStore(string configurationPath, string credentialPath, string? legacyConfigurationPath = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(configurationPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(credentialPath);
 
         ConfigurationPath = configurationPath;
         CredentialPath = credentialPath;
+        LegacyConfigurationPath = legacyConfigurationPath;
     }
 
     /// <summary>Where the document lives.</summary>
     public string ConfigurationPath { get; }
+
+    /// <summary>Where a schema 1 document is read from, if there is one to read.</summary>
+    public string? LegacyConfigurationPath { get; }
+
+    /// <summary>
+    /// The document to read: the schema 2 one, unless the schema 1 one is newer.
+    /// </summary>
+    /// <remarks>
+    /// The schema 1 file is newer when a build from before schema 2 was installed as a rollback and
+    /// the user changed their rules with it. Those changes are the latest thing the user asked for, so
+    /// they are what gets migrated, rather than silently losing to an older schema 2 file.
+    /// </remarks>
+    public string SourcePath
+    {
+        get
+        {
+            var legacy = LegacyConfigurationPath;
+            if (legacy is null || !File.Exists(legacy))
+            {
+                return ConfigurationPath;
+            }
+
+            if (!File.Exists(ConfigurationPath))
+            {
+                return legacy;
+            }
+
+            return File.GetLastWriteTimeUtc(legacy) > File.GetLastWriteTimeUtc(ConfigurationPath)
+                ? legacy
+                : ConfigurationPath;
+        }
+    }
 
     /// <summary>Where the protected credential lives.</summary>
     public string CredentialPath { get; }
@@ -62,12 +103,21 @@ public sealed class ConfigurationStore
     {
         lock (_gate)
         {
-            if (!File.Exists(ConfigurationPath))
+            var source = SourcePath;
+            if (!File.Exists(source))
             {
                 return RuntimeConfiguration.Empty;
             }
 
-            var json = File.ReadAllText(ConfigurationPath, Encoding.UTF8);
+            // Any user can write this file and ask the engine to read it, so its size is checked before
+            // it is read: a file of gigabytes would otherwise take the LocalSystem service down, and
+            // every selected application's traffic with it.
+            if (new FileInfo(source).Length > MaxConfigurationBytes)
+            {
+                throw new IOException($"{source} is larger than {MaxConfigurationBytes} bytes");
+            }
+
+            var json = File.ReadAllText(source, Encoding.UTF8);
             var configuration = ConfigurationCodec.DecodeFromJson(json);
             return ConfigurationValidator.Sanitize(configuration);
         }
@@ -85,7 +135,7 @@ public sealed class ConfigurationStore
                                        or ConfigurationValidationException
                                        or System.Text.Json.JsonException)
         {
-            error = $"Could not read {ConfigurationPath}: {ex.Message}";
+            error = $"Could not read {SourcePath}: {ex.Message}";
             SplitLaneLog.Error(LogCategory, error);
             return RuntimeConfiguration.Empty;
         }
@@ -126,8 +176,10 @@ public sealed class ConfigurationStore
     /// </summary>
     /// <remarks>
     /// <c>LocalMachine</c> scope rather than <c>CurrentUser</c>, because the engine reads it as a
-    /// service account and the app writes it as the interactive user. The file's ACL is what keeps it
-    /// away from other users; the encryption is what keeps it away from a copied disk.
+    /// service account and the app writes it as the interactive user. LocalMachine scope means any
+    /// process on this machine that can read the file can decrypt it, and no code here narrows the
+    /// file's ACL, so it inherits the folder's; the encryption only keeps it away from a copied disk.
+    /// Tightening that is on the fleet plan (docs/ENTERPRISE_READINESS.md, P1-5).
     /// </remarks>
     public void SaveCredential(string password)
     {

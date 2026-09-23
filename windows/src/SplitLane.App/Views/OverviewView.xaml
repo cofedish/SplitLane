@@ -142,7 +142,7 @@
                 </Border>
 
                 <Border Style="{StaticResource Card}" Margin="8,0"
-                        ToolTip="Selected-application UDP, refused so it cannot bypass the proxy.">
+                        ToolTip="Connections and datagrams SplitLane refused: applications in the Blocked lane, a selected application's UDP when it cannot go through the proxy, and programs no longer the application their rule was made for.">
                     <StackPanel>
                         <TextBlock Text="{Binding BlockedCount}" Style="{StaticResource Metric}" />
                         <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
@@ -229,7 +229,7 @@
                             <Ellipse Width="5" Height="5" Fill="{DynamicResource ProxyBrush}"
                                      VerticalAlignment="Top" Margin="0,7,10,0" />
                             <TextBlock Style="{StaticResource BodyText}" MaxWidth="700" HorizontalAlignment="Left"
-                                       Text="A selected application's UDP is refused rather than let out. QUIC fails closed so the application falls back to TCP, which is proxied." />
+                                       Text="A selected application's UDP never goes out DIRECT. It is relayed through the proxy, or dropped when relaying is switched off or the proxy will not carry it — QUIC then falls back to TCP, which is proxied." />
                         </StackPanel>
                         <StackPanel Orientation="Horizontal">
                             <Ellipse Width="5" Height="5" Fill="{DynamicResource WarningBrush}"

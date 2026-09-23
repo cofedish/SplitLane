@@ -35,6 +35,9 @@ public enum ConfigurationValidationCode
 
     /// <summary>The redirect port collides with the upstream proxy port on loopback.</summary>
     RedirectPortCollision,
+
+    /// <summary>More rules than the engine will take.</summary>
+    TooManyRules,
 }
 
 /// <summary>A configuration that cannot be applied, and why.</summary>
@@ -64,10 +67,26 @@ public sealed class ConfigurationValidationException(ConfigurationValidationCode
 /// </remarks>
 public static class ConfigurationValidator
 {
+    /// <summary>
+    /// The most rules a configuration may hold.
+    /// </summary>
+    /// <remarks>
+    /// Far beyond anything a person selects by hand, and a bound on what the LocalSystem engine can be
+    /// asked to do with the file every user can write: migration reads and verifies each rule's file.
+    /// </remarks>
+    public const int MaxRules = 1000;
+
     /// <summary>Throws if the configuration cannot be applied.</summary>
     public static void Validate(RuntimeConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
+
+        if (configuration.Rules.Count > MaxRules)
+        {
+            throw new ConfigurationValidationException(
+                ConfigurationValidationCode.TooManyRules,
+                $"{configuration.Rules.Count} rules is more than the {MaxRules} the engine takes");
+        }
 
         if (!configuration.Version.IsReadable)
         {
@@ -173,7 +192,7 @@ public static class ConfigurationValidator
         var rules = new List<AppRule>(configuration.Rules.Count);
         var seen = new HashSet<string>(ExecutablePath.Comparer);
 
-        foreach (var rule in configuration.Rules)
+        foreach (var rule in configuration.Rules.Take(MaxRules))
         {
             var normalized = ExecutablePath.Normalize(rule.Identity.ExecutablePath);
             if (string.IsNullOrWhiteSpace(normalized) || !IsAbsolutePath(normalized) || !seen.Add(normalized))
@@ -186,11 +205,35 @@ public static class ConfigurationValidator
                 ? MatchMode.Exact
                 : rule.MatchMode;
 
-            rules.Add(rule with { Identity = identity, MatchMode = mode });
+            var sanitized = rule with { Identity = identity, MatchMode = mode };
+
+            // An identity with its identifying part missing would, if it reached the snapshot, match
+            // on whatever part is left - a signed rule with no publisher accepts any valid signature.
+            // The snapshot refuses such a rule too; marking it here is what makes the refusal visible.
+            if (IncompleteIdentity(identity) is { } missing && sanitized.Status == RuleStatus.Active)
+            {
+                sanitized = sanitized with
+                {
+                    Status = RuleStatus.NeedsReselection,
+                    StatusDetail = $"The stored identity has no {missing}. Select the application again.",
+                };
+            }
+
+            rules.Add(sanitized);
         }
 
         return configuration with { Rules = rules };
     }
+
+    /// <summary>The part an identity needs and does not have, or null when it is complete.</summary>
+    internal static string? IncompleteIdentity(AppIdentity identity) => identity.Kind switch
+    {
+        IdentityKind.Signed when string.IsNullOrWhiteSpace(identity.SignerSubject) => "publisher",
+        IdentityKind.Signed when string.IsNullOrWhiteSpace(identity.BinaryName) => "file name",
+        IdentityKind.Package when string.IsNullOrWhiteSpace(identity.PackageFamilyName) => "package family",
+        IdentityKind.Unsigned when string.IsNullOrWhiteSpace(identity.FileSha256) => "file hash",
+        _ => null,
+    };
 
     /// <summary>True for a rooted Windows path: a drive-qualified path or a UNC path.</summary>
     internal static bool IsAbsolutePath(string normalizedPath)

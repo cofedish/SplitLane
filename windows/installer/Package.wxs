@@ -116,6 +116,62 @@
       </Component>
     </ComponentGroup>
 
+    <!--
+      Restarted when it fails: 5 s after the first failure, 10 s after the second, 30 s after every
+      one after that, and the count forgotten after a day (86400 s) without one. Without this a crash
+      left the service stopped - `sc qfailure SplitLane` on an installed machine listed no actions -
+      and every selected application went DIRECT until somebody noticed. `failureflag 1` extends it
+      to an engine that stops itself with a non-zero exit code, which the service manager otherwise
+      treats like a stop somebody asked for. A stop somebody did ask for still stays stopped: the
+      engine never sets ServiceBase.ExitCode, so it reports 0.
+
+      Set with sc.exe, because neither WiX element can say this:
+
+        - ServiceConfig and ServiceConfigFailureActions write the MsiServiceConfig tables, and the
+          Windows Installer SDK documents MsiConfigureServices failure actions as "not working as
+          expected", naming a custom action that runs sc.exe as the workaround. WiX 5.0.2 answers
+          both elements with WIX1149, and warnings are errors here: tried, and the build stopped.
+        - util:ServiceConfig does work, but it has one RestartServiceDelayInSeconds for all three
+          actions and nothing for the failure flag, so it cannot express 5/10/30 or a non-zero exit.
+
+      WixQuietExec rather than a bare exe action because it writes the command line and sc.exe's
+      output into the installer log. Return="check", because a service installed without recovery
+      is the defect this fixes; failing to configure it fails the install, as ServiceInstall does
+      by being Vital.
+
+      Deferred and not impersonated, so it runs as LocalSystem. After InstallServices and before
+      StartServices, so the first start is already covered. On install and on repair ($EngineService
+      is 3 for both), so a repair puts back settings that were cleared. A major upgrade removes the
+      old product, service included, before this one installs, so it is an install here too. Nothing
+      runs on uninstall: the service is deleted.
+    -->
+    <SetProperty Id="ConfigureEngineRecovery"
+                 Value="&quot;[System64Folder]sc.exe&quot; failure SplitLane reset= 86400 actions= restart/5000/restart/10000/restart/30000"
+                 Before="ConfigureEngineRecovery"
+                 Sequence="execute" />
+    <CustomAction Id="ConfigureEngineRecovery"
+                  BinaryRef="Wix4UtilCA_X64"
+                  DllEntry="WixQuietExec"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="check" />
+
+    <SetProperty Id="ConfigureEngineRecoveryFlag"
+                 Value="&quot;[System64Folder]sc.exe&quot; failureflag SplitLane 1"
+                 Before="ConfigureEngineRecoveryFlag"
+                 Sequence="execute" />
+    <CustomAction Id="ConfigureEngineRecoveryFlag"
+                  BinaryRef="Wix4UtilCA_X64"
+                  DllEntry="WixQuietExec"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="check" />
+
+    <InstallExecuteSequence>
+      <Custom Action="ConfigureEngineRecovery" After="InstallServices" Condition="$EngineService = 3" />
+      <Custom Action="ConfigureEngineRecoveryFlag" After="ConfigureEngineRecovery" Condition="$EngineService = 3" />
+    </InstallExecuteSequence>
+
     <ComponentGroup Id="ToolFiles" Directory="ToolsFolder">
       <Files Include="$(ToolsDir)\fetch-windivert.ps1" />
     </ComponentGroup>

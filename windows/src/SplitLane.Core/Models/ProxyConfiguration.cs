@@ -38,14 +38,22 @@ public sealed record ProxyEndpoint
 }
 
 /// <summary>
-/// Reference to a credential held by the Windows credential store.
+/// Reference to the proxy credential, which is stored apart from the configuration.
 /// </summary>
 /// <remarks>
-/// This type carries <b>no secret material</b>, only a locator, and that is the whole point.
-/// Configuration is written to a JSON file that any process running as the user can read; a password
-/// in it would be a password on disk in the clear. The secret lives in a DPAPI-protected blob keyed
-/// to the machine, readable only by the engine's service account. A test in
-/// <c>ConfigurationCodecTests</c> enforces that no serialised configuration ever contains one.
+/// <para>
+/// This type carries <b>no secret material</b>, only a username, and that is the whole point.
+/// Configuration is a JSON file under <c>%ProgramData%\SplitLane</c> that every local user can read;
+/// a password in it would be a password on disk in the clear.
+/// <c>ConfigurationTests.EncodedConfigurationNeverContainsSecrets</c> enforces that no serialised
+/// configuration ever contains one.
+/// </para>
+/// <para>
+/// The password lives in <c>%ProgramData%\SplitLane\credential.bin</c>, a DPAPI blob with
+/// <c>LocalMachine</c> scope. That makes it meaningless on another machine, not private on this one:
+/// any process here that can read the file can decrypt it, and no code sets an ACL on it - it has
+/// whatever permissions it inherits from the folder (THREAT_MODEL W-9).
+/// </para>
 /// </remarks>
 public sealed record CredentialReference
 {
@@ -53,9 +61,12 @@ public sealed record CredentialReference
     public required string Username { get; init; }
 
     /// <summary>
-    /// Opaque key naming the protected blob that holds the password, or null when the secret is
-    /// delivered to the engine out of band.
+    /// Opaque key meant to name the protected blob that holds the password.
     /// </summary>
+    /// <remarks>
+    /// Written by the app and not read by the engine, which always takes the password from
+    /// <c>credential.bin</c> when a username is present. Nothing depends on its value.
+    /// </remarks>
     public string? SecretKey { get; init; }
 }
 
@@ -84,15 +95,15 @@ public sealed record ProxyConfiguration
     public int HandshakeTimeoutMilliseconds { get; init; } = 10_000;
 
     /// <summary>
-    /// When true, a selected application whose flow cannot be proxied falls back to DIRECT instead
-    /// of failing.
+    /// Reserved for letting a selected application whose flow cannot be proxied fall back to DIRECT
+    /// instead of failing. Not implemented.
     /// </summary>
     /// <remarks>
-    /// <b>Defaults to false and has no UI.</b> Silent fallback turns a visible error into an
-    /// invisible leak, which is the exact failure this product exists to prevent (ADR 0003). The
-    /// field exists so that the future opt-in is a deliberate, documented downgrade rather than a
-    /// retrofit — and on Windows it is additionally load-bearing for the redirector, which must know
-    /// whether to answer a redirected connection with a reset or with a re-injected direct SYN.
+    /// <b>Defaults to false, has no UI, and is not read by the engine.</b> A selected application's
+    /// connection that cannot be proxied fails whatever this says. Silent fallback turns a visible
+    /// error into an invisible leak, which is the exact failure this product exists to prevent
+    /// (ADR 0003). The field exists so that a future opt-in would be a deliberate, documented
+    /// downgrade rather than a retrofit; nothing implements it today.
     /// </remarks>
     public bool AllowDirectFallback { get; init; }
 

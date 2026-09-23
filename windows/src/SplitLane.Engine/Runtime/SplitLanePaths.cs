@@ -21,8 +21,26 @@ public static class SplitLanePaths
     public static string Root { get; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "SplitLane");
 
-    /// <summary>The configuration document.</summary>
-    public static string ConfigurationFile => Path.Combine(Root, "configuration.json");
+    /// <summary>The configuration document, schema 2 and later.</summary>
+    /// <remarks>
+    /// A file of its own rather than a new version of the old one. A build from before schema 2 refuses
+    /// a document stamped with a newer schema and would start with no rules at all; left alone, the
+    /// schema 1 file beside this one is what such a build finds if it is installed as a rollback.
+    /// </remarks>
+    public static string ConfigurationFile => Path.Combine(Root, "configuration.v2.json");
+
+    /// <summary>The schema 1 document. Read to migrate from, never written by this build.</summary>
+    public static string LegacyConfigurationFile => Path.Combine(Root, "configuration.json");
+
+    /// <summary>
+    /// The managed policy, placed by an administrator or by device management.
+    /// </summary>
+    /// <remarks>
+    /// In a folder of its own because the folder above is writable by every user; the service creates
+    /// this one with inheritance cut and only SYSTEM and Administrators able to write. See
+    /// <see cref="PolicyStore"/> and <see cref="PolicyFileTrust"/>.
+    /// </remarks>
+    public static string PolicyFile => Path.Combine(Root, "Policy", "policy.json");
 
     /// <summary>The DPAPI-protected proxy credential.</summary>
     public static string CredentialFile => Path.Combine(Root, "credential.bin");

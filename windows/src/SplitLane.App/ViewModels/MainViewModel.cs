@@ -2,6 +2,7 @@ using System.IO;
 using System.Windows.Threading;
 using SplitLane.App.Infrastructure;
 using SplitLane.App.Services;
+using SplitLane.Core.Configuration;
 using SplitLane.Core.Ipc;
 using SplitLane.Core.Models;
 
@@ -54,6 +55,8 @@ public sealed class MainViewModel : ObservableObject
     private string? _banner;
     private bool _bannerIsError;
     private bool _suppressDirty;
+    private int _loadGeneration;
+    private MigrationResult? _lastMigration;
 
     /// <summary>Builds the view model and loads what is on disk.</summary>
     public MainViewModel()
@@ -75,6 +78,7 @@ public sealed class MainViewModel : ObservableObject
         Applications.LoadFrom(_configuration);
         Proxy.LoadFrom(_configuration);
         Settings.LoadFrom(_configuration);
+        BeginMigration(_configuration);
 
         GoToCommand = new RelayCommand(parameter =>
         {
@@ -269,6 +273,16 @@ public sealed class MainViewModel : ObservableObject
     /// <summary>Whether a banner is showing.</summary>
     public bool HasBanner => !string.IsNullOrEmpty(Banner);
 
+    /// <summary>
+    /// What converting the loaded rules from paths to identities did, rule by rule; null when the
+    /// last load had nothing to convert or conversion has not finished.
+    /// </summary>
+    public MigrationResult? LastMigration
+    {
+        get => _lastMigration;
+        private set => Set(ref _lastMigration, value);
+    }
+
     /// <summary>Starts polling. Called once the window is up.</summary>
     public async Task StartAsync()
     {
@@ -308,10 +322,83 @@ public sealed class MainViewModel : ObservableObject
             HasUnsavedChanges = false;
 
             SetBanner(error is null ? null : $"Configuration could not be read: {error}", isError: error is not null);
+            BeginMigration(Configuration);
         }
         finally
         {
             _suppressDirty = false;
+        }
+    }
+
+    /// <summary>
+    /// Converts a freshly loaded configuration's path rules to identity rules, in the background.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The window shows the rules as stored straight away and is usable throughout. Conversion
+    /// verifies the signature of every file a path rule names - seconds, for large executables - and
+    /// this runs at startup, where a frozen window reads as a crash.
+    /// </para>
+    /// <para>
+    /// Not counted as an unsaved change. The user did not make it, and the engine makes the same
+    /// conversion itself when it loads the document; the app shows its copy so that what is on screen
+    /// is what will route, and the next save the user does make writes it.
+    /// </para>
+    /// </remarks>
+    private void BeginMigration(RuntimeConfiguration loaded)
+    {
+        var generation = ++_loadGeneration;
+        LastMigration = null;
+
+        if (!ConfigurationService.NeedsMigration(loaded))
+        {
+            Applications.IsMigrating = false;
+            return;
+        }
+
+        _ = MigrateAsync(loaded, generation);
+    }
+
+    private async Task MigrateAsync(RuntimeConfiguration loaded, int generation)
+    {
+        Applications.IsMigrating = true;
+
+        try
+        {
+            var result = await ConfigurationService.MigrateAsync(loaded).ConfigureAwait(true);
+
+            // Reloaded while it ran: that load has its own conversion, and this one describes rows
+            // that are no longer on screen.
+            if (generation != _loadGeneration)
+            {
+                return;
+            }
+
+            LastMigration = result;
+            Applications.ApplyMigration(result);
+
+            if (RulePresentation.MigrationSummary(result) is { } summary)
+            {
+                SetBanner(summary);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException
+                                       or InvalidOperationException)
+        {
+            // The path rules stay exactly as they were, which is how they have been routing all along.
+            if (generation == _loadGeneration)
+            {
+                SetBanner(
+                    $"Rules recorded by path could not be converted: {ex.Message} They keep working as before.",
+                    isError: true);
+            }
+        }
+        finally
+        {
+            if (generation == _loadGeneration)
+            {
+                Applications.IsMigrating = false;
+            }
         }
     }
 

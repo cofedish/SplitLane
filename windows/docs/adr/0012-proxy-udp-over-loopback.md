@@ -2,7 +2,8 @@
 
 **Status:** Accepted
 **Date:** 2026-08-22
-**Supersedes:** the fail-closed half of the UDP rule in [W-0001](0001-windivert-and-loopback-nat.md)
+**Supersedes on Windows:** the fail-closed half of macOS [ADR 0004](../../../docs/adr/0004-tcp-first-mvp.md)
+(TCP-first, with UDP failed closed), which the Windows port had followed. W-0001 made no rule about UDP.
 
 ## Context
 
@@ -55,15 +56,24 @@ has always done, and the reason that path works.
 ## Consequences
 
 - Voice, and anything else with no TCP fallback, works for a selected application.
-- The divert filter now also captures outbound loopback UDP, so every datagram between local sockets
-  on the machine passes through the packet loop. They are recognised by lane port and forwarded
-  untouched — a dictionary lookup each. Naming the lane ports in the filter instead would mean
-  reopening the handle every time an application talks to a new host.
+- The divert filter also captures the lanes' replies on loopback, and **names only the lanes'
+  ports**. The lanes come from a contiguous block of loopback ports (`UdpLanePool`) reserved
+  *before* the filter is built, so the filter can say `udp.SrcPort >= first and udp.SrcPort <= last`
+  and never needs reopening when an application talks to a new host.
+
+  The first version of this record, and of the code, captured all outbound loopback UDP instead and
+  recognised lanes by port in the packet loop, on the reasoning that a dictionary lookup per datagram
+  is cheap. It is; ten thousand datagrams a second of other software's traffic is not. On a machine
+  whose DNS ran through a local tunnel it broke name resolution outright — TCP by address still
+  worked, so what the user saw was an internet that had gone, with no error anywhere. Naming the block
+  took the packets captured in a minute from 618,646 to 8,315. If no block can be reserved, UDP is
+  refused rather than relayed, and the filter does not name loopback UDP at all.
 - A lane is opened synchronously on the first datagram, so unlike a design that waited for the
   association, the first datagram of a conversation is not lost.
 - Lanes and associations are evicted after two minutes idle; an association holds a TCP connection
   at the proxy for as long as it lives.
-- Bounded at 512 lanes. Beyond that, datagrams are refused rather than relayed - still not forwarded.
+- Bounded at 64 lanes by default, the size of the reserved block. Beyond that, datagrams are refused
+  rather than relayed - still not forwarded.
 - IPv6 datagrams are not relayed. They are refused, as before.
 - A proxy that will not grant `UDP ASSOCIATE` produces one warning per socket and dropped datagrams.
   That is the old behaviour, arrived at honestly rather than by default.

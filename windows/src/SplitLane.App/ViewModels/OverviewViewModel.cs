@@ -145,7 +145,7 @@ public sealed class OverviewViewModel : ObservableObject
             {
                 DivertState.Running =>
                     $"{Status.ActiveRuleCount} rule{(Status.ActiveRuleCount == 1 ? "" : "s")} active. " +
-                    "Applications you have not selected are untouched.",
+                    "Applications you have not selected stay DIRECT, their traffic passed through unmodified.",
                 DivertState.Paused =>
                     "The engine is running but routing is switched off, so every application is DIRECT.",
                 DivertState.Starting => "Opening the divert handles.",

@@ -26,8 +26,9 @@ that installed SplitLane.
 - The engine verifies the signature **before parsing the document**, hashes the downloaded installer
   against what the verified manifest said, and takes the version and the URL from that document
   rather than from anywhere they could be substituted.
-- The installer URL is additionally constrained to HTTPS on the release host. The URL comes out of a
-  signed document, so this only matters if the key ever leaks — which is exactly when it matters.
+- The installer URL is additionally constrained to HTTPS on `github.com`, `*.github.com` or
+  `objects.githubusercontent.com` (`UpdateManifest`). The URL comes out of a signed document, so this
+  only matters if the key ever leaks — which is exactly when it matters.
 - A release published without the signing secret gets **no manifest**, not an unsigned one.
 
 **The engine checks; the person installs.** Applying an update restarts the service and drops every
@@ -57,6 +58,18 @@ second mechanism to get wrong.
 - Verification is pure and lives in `SplitLane.Core`, reachable from tests with no network and no key
   material checked in — each test makes its own pair, so no test can pass by being handed the real
   one.
+- Any interactive user can ask for an install, because the control channel is open to every one of
+  them (THREAT_MODEL W-7, W-12). They choose when, never what. An organisation that wants to control
+  updates itself sets `disableSelfUpdate` in the managed policy (ADR W-0014), and the engine then
+  refuses both to check and to install.
+
+## Status of delivery
+
+The signing pipeline is verified end to end: a published manifest is accepted by the key the build
+ships and an edited copy is refused. The repository is public, and
+`https://github.com/cofedish/SplitLane/releases/latest/download/update.json` answers an anonymous
+request with HTTP 200 (checked 2026-09-23), so an installation can reach it. An install through the
+updater has not been run.
 
 ## Alternatives considered
 

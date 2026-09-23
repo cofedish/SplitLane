@@ -24,4 +24,13 @@
     <DefineConstants>BuildVersion=$(BuildVersion);AppPublishDir=$(AppPublishDir);EnginePublishDir=$(EnginePublishDir);ToolsDir=$(ToolsDir)</DefineConstants>
   </PropertyGroup>
 
+  <!--
+    For WixQuietExec, which sets the engine service's recovery actions - see Package.wxs. The same
+    version as the SDK above: an extension is built against one WiX release and is not mixed with
+    another.
+  -->
+  <ItemGroup>
+    <PackageReference Include="WixToolset.Util.wixext" Version="5.0.2" />
+  </ItemGroup>
+
 </Project>

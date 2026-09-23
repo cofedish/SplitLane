@@ -37,6 +37,10 @@ internal sealed class EngineHost : IAsyncDisposable
         _runtime = new EngineRuntime(_store, options);
         _runtime.LoadConfiguration();
 
+        // After the first load, so a policy already in place applies from the first decision; the
+        // watcher is what makes a rule an administrator removes stop applying without a restart.
+        _runtime.StartPolicyWatch();
+
         _control = new ControlServer(_runtime, _store);
         _control.Start();
     }

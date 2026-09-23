@@ -14,6 +14,29 @@ using SplitLane.Engine.Runtime;
 
 namespace SplitLane.Engine.Divert;
 
+/// <summary>What was decided about a UDP socket when it bound.</summary>
+/// <param name="ProcessId">Who owns it. Diagnostic.</param>
+/// <param name="Action">
+/// Proxy to carry its datagrams, Block to refuse them. Never Direct: a selected application's
+/// datagrams do not leave this machine unproxied, and an unselected one is not in this table.
+/// </param>
+internal readonly record struct UdpSocketDecision(uint ProcessId, RouteAction Action);
+
+/// <summary>A TCP connection held while its process's identity is verified.</summary>
+/// <param name="Flow">The flow as it was described at connect time.</param>
+/// <param name="Local">The application's own address.</param>
+/// <param name="Remote">Where it was connecting.</param>
+/// <param name="Image">The process's image, whose verification is awaited.</param>
+/// <param name="PackageFamily">The package family from the process token, if any.</param>
+internal sealed record PendingConnection(
+    FlowDescriptor Flow, IPAddress Local, IPAddress Remote, ImageRecord Image, string? PackageFamily);
+
+/// <summary>A UDP socket whose datagrams are held while its process's identity is verified.</summary>
+/// <param name="Flow">The flow as it was described when the socket bound.</param>
+/// <param name="Image">The process's image, whose verification is awaited.</param>
+/// <param name="PackageFamily">The package family from the process token, if any.</param>
+internal sealed record PendingBind(FlowDescriptor Flow, ImageRecord Image, string? PackageFamily);
+
 /// <summary>
 /// The divert layer: three WinDivert handles and the threads that drain them.
 /// </summary>
@@ -27,31 +50,31 @@ namespace SplitLane.Engine.Divert;
 /// <b>Identity arrives separately from packets.</b> The socket layer reports a process id at
 /// <c>connect()</c> time; the network layer reports packets with no process at all. So the socket
 /// pump makes the routing decision in advance and leaves a NAT entry, and the packet loop is a
-/// lookup keyed on the source port. That ordering is guaranteed by Windows: the socket-layer event is
-/// delivered before the SYN is sent.
+/// lookup keyed on the source port. Windows generates the socket event before the SYN, but the two
+/// arrive through separate queues on separate threads, so a SYN with no decision yet waits a few
+/// milliseconds for one (see <see cref="WaitForDecision"/>).
 /// </item>
 /// <item>
 /// <b>Unselected traffic is copied, not untouched.</b> On macOS, returning <c>false</c> hands the
 /// flow back to the kernel and nothing is recreated. Here, an outbound packet from an unselected
 /// application transits user mode and is reinjected byte-for-byte. It is unmodified, but it is not
 /// untouched, and pretending otherwise would be dishonest. This is the single largest behavioural
-/// difference between the two builds and is documented in docs/windows/NETWORKING.md.
+/// difference between the two builds and is documented in docs/NETWORKING.md.
 /// </item>
 /// <item>
-/// <b>Nothing is opened until something needs routing.</b> When routing is paused, or when no enabled
-/// rule sends anything to the proxy, the handles are closed and not one packet is intercepted. A
-/// paused SplitLane on Windows really is inert.
+/// <b>Identity can take longer than a connection is willing to wait.</b> A process whose file name,
+/// folder or size points at a selected application is not routed on that claim: its image is verified
+/// in the background, and until then its SYN and datagrams are dropped - held, not refused, because
+/// TCP retransmits the SYN a second later and by then the answer is usually in. Guessing either way
+/// would be worse: DIRECT leaks a selected application, PROXY hands its lane to an impostor.
+/// </item>
+/// <item>
+/// <b>The handles stay open while the engine routes</b>, whether or not any rule currently selects
+/// anything; pausing routing makes every decision DIRECT but does not close them. Only stopping routing
+/// does.
 /// </item>
 /// </list>
 /// </remarks>
-/// <summary>What was decided about a UDP socket when it bound.</summary>
-/// <param name="ProcessId">Who owns it. Diagnostic.</param>
-/// <param name="Action">
-/// Proxy to carry its datagrams, Block to refuse them. Never Direct: a selected application's
-/// datagrams do not leave this machine unproxied, and an unselected one is not in this table.
-/// </param>
-internal readonly record struct UdpSocketDecision(uint ProcessId, RouteAction Action);
-
 public sealed class DivertPipeline : IAsyncDisposable
 {
     private const string LogCategory = "divert";
@@ -89,6 +112,8 @@ public sealed class DivertPipeline : IAsyncDisposable
     /// </remarks>
     private readonly ConcurrentDictionary<ushort, UdpSocketDecision> _udpPortOwners = new();
     private readonly ConcurrentDictionary<ushort, IPAddress> _udpOrigins = new();
+    private readonly ConcurrentDictionary<ushort, PendingConnection> _pendingTcp = new();
+    private readonly ConcurrentDictionary<ushort, PendingBind> _pendingUdp = new();
     private UdpRelay? _udpRelay;
     private UdpLanePool? _lanePool;
 
@@ -110,6 +135,10 @@ public sealed class DivertPipeline : IAsyncDisposable
     private long _traced;
     private long _udpRedirected;
     private long _udpRestored;
+    private long _held;
+    private long _released;
+    private long _heldPacketsDropped;
+    private long _refusedPacketsDropped;
     private Timer? _heartbeat;
     private DivertHandle? _traceHandle;
     private Thread? _traceThread;
@@ -118,9 +147,8 @@ public sealed class DivertPipeline : IAsyncDisposable
     /// Whether a redirected connection is moved to loopback, or to the machine's own address.
     /// </summary>
     /// <remarks>
-    /// Loopback is the original design and does not currently deliver: the packet is rewritten, the
-    /// driver accepts the injection, and nothing ever reaches the listener. This switch exists so
-    /// both shapes can be tried in one elevated session rather than one rebuild at a time.
+    /// Loopback is the default and the shape verified on a live machine. The switch exists so the
+    /// other shape can still be tried in one elevated session rather than one rebuild at a time.
     /// </remarks>
     public bool UseLoopbackRedirect { get; init; } = true;
 
@@ -144,6 +172,42 @@ public sealed class DivertPipeline : IAsyncDisposable
 
     /// <summary>Its credential, read the same way.</summary>
     public Func<Socks5Credential?>? Credential { get; init; }
+
+    /// <summary>
+    /// Where process images are verified. Without it a flow that depends on verification is refused,
+    /// never guessed at.
+    /// </summary>
+    public ImageCatalog? Images { get; init; }
+
+    /// <summary>Connections and sockets currently held for verification. Diagnostic.</summary>
+    public int HeldCount => _pendingTcp.Count + _pendingUdp.Count;
+
+    /// <summary>
+    /// Raised once, on the failing thread, when the socket pump or the packet loop can no longer do its
+    /// job: it threw, or its handle has refused a thousand receives in a row.
+    /// </summary>
+    /// <remarks>
+    /// Without this the engine stayed up and reported itself running while no decision was being made
+    /// - every selected application quietly DIRECT, and a service manager with nothing to restart
+    /// because the process was alive. The runtime restarts routing when it hears this.
+    /// </remarks>
+    public event Action<string>? Faulted;
+
+    private int _faulted;
+
+    private void Fault(string reason)
+    {
+        if (!_running || Interlocked.Exchange(ref _faulted, 1) != 0)
+        {
+            return;
+        }
+
+        SplitLaneLog.Error(LogCategory, $"routing has stopped working: {reason}");
+        Faulted?.Invoke(reason);
+    }
+
+    /// <summary>Consecutive failed receives after which a divert thread counts as dead.</summary>
+    private const int FailuresBeforeFault = 1000;
 
     /// <summary>Builds a pipeline over the shared engine state.</summary>
     public DivertPipeline(
@@ -181,16 +245,17 @@ public sealed class DivertPipeline : IAsyncDisposable
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Three clauses, and each one earns its place:
+    /// Three clauses, and a fourth when UDP is relayed; each one earns its place:
     /// </para>
     /// <list type="number">
     /// <item>Outbound non-loopback TCP — the application's traffic, which may need redirecting.</item>
     /// <item>Outbound loopback TCP from the listener — the replies, which need restoring. Matching on
     /// the listener's own source port keeps the redirected traffic itself, whose source port is the
     /// application's, from being captured a second time and looping.</item>
-    /// <item>Outbound non-loopback UDP — needed only so that a selected application's datagrams can
-    /// be dropped rather than allowed to escape. This is the expensive clause, and it is here because
-    /// failing closed matters more than throughput (ADR 0004).</item>
+    /// <item>Outbound non-loopback UDP — so a selected application's datagrams can be relayed through
+    /// its lane, or dropped rather than allowed to escape. This is the expensive clause, and it is here
+    /// because failing closed matters more than throughput (ADR W-0012).</item>
+    /// <item>Outbound loopback UDP from the reserved lane block — the relayed replies.</item>
     /// </list>
     /// </remarks>
     internal static string NetworkFilter(ushort listenerPort, UdpLanePool? lanes = null)
@@ -304,6 +369,11 @@ public sealed class DivertPipeline : IAsyncDisposable
 
         _running = true;
 
+        if (Images is not null)
+        {
+            Images.Verified += OnImageVerified;
+        }
+
         _socketThread = StartThread("SplitLane.SocketPump", () => SocketLoop(_socketHandle));
         _networkThread = StartThread("SplitLane.PacketLoop", () => NetworkLoop(_networkHandle));
 
@@ -335,7 +405,11 @@ public sealed class DivertPipeline : IAsyncDisposable
                 $"udp redirected {Interlocked.Read(ref _udpRedirected)}, " +
                 $"udp restored {Interlocked.Read(ref _udpRestored)}, " +
                 $"udp dropped {_udpRelay?.Refused ?? 0}, " +
-                $"lanes {_udpRelay?.Count ?? 0}"),
+                $"lanes {_udpRelay?.Count ?? 0}, " +
+                $"held now {HeldCount}, held {Interlocked.Read(ref _held)}, " +
+                $"released {Interlocked.Read(ref _released)}, " +
+                $"held drops {Interlocked.Read(ref _heldPacketsDropped)}, " +
+                $"refused drops {Interlocked.Read(ref _refusedPacketsDropped)}"),
             null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
 
         SplitLaneLog.Info(
@@ -372,12 +446,17 @@ public sealed class DivertPipeline : IAsyncDisposable
                     // A failing receive is reported, not slept through. The first version spun here
                     // on a one-millisecond sleep and routed nothing, which from the outside looked
                     // exactly like a machine with no traffic on it.
-                    if (++failures is 1 or 100 or 1000)
+                    if (++failures is 1 or 100 or FailuresBeforeFault)
                     {
                         SplitLaneLog.Error(
                             LogCategory,
                             $"socket layer receive failed (Win32 {error}), {failures} so far - no " +
                             "application identity is reaching the router, so everything is DIRECT");
+                    }
+
+                    if (failures == FailuresBeforeFault)
+                    {
+                        Fault($"the socket layer refused {FailuresBeforeFault} receives in a row (Win32 {error})");
                     }
 
                     Thread.Sleep(failures < 100 ? 1 : 50);
@@ -392,6 +471,7 @@ public sealed class DivertPipeline : IAsyncDisposable
         catch (Exception ex) when (_running)
         {
             SplitLaneLog.Error(LogCategory, "socket pump stopped", ex);
+            Fault($"the socket pump stopped: {ex.Message}");
         }
     }
 
@@ -403,6 +483,8 @@ public sealed class DivertPipeline : IAsyncDisposable
         {
             case WinDivertEvent.SocketClose:
                 _nat.Remove(socket.LocalPort);
+                _pendingTcp.TryRemove(socket.LocalPort, out _);
+                _pendingUdp.TryRemove(socket.LocalPort, out _);
 
                 if (_udpPortOwners.TryRemove(socket.LocalPort, out _))
                 {
@@ -433,29 +515,56 @@ public sealed class DivertPipeline : IAsyncDisposable
             return;
         }
 
-        var path = _processes.Resolve(socket.ProcessId);
-        if (path.Length == 0)
+        var info = _processes.ResolveInfo(socket.ProcessId);
+        if (info.IsUnknown)
         {
             return;
         }
+
+        var engine = _engine();
 
         // Only ports belonging to applications that would be proxied are remembered. Everything else
         // never needs a lookup, and a map of every UDP socket on the machine would be both larger and
         // a description of what the user is doing.
         var flow = new FlowDescriptor(
-            socket.ProcessId, path, "203.0.113.1", 0, FlowProtocol.Udp);
+            socket.ProcessId, info.ExecutablePath, "203.0.113.1", 0, FlowProtocol.Udp,
+            Image: EvidenceFor(info, engine));
+
+        var decision = engine.Decide(flow);
+
+        if (decision.Reason == RouteReasonKind.IdentityPending && Images is not null && info.Image is not null)
+        {
+            // Held: the datagrams are dropped until the image is verified, then the socket is decided
+            // again. QUIC and DNS both retransmit.
+            _udpPortOwners[socket.LocalPort] = new UdpSocketDecision(socket.ProcessId, RouteAction.Block);
+            _pendingUdp[socket.LocalPort] = new PendingBind(flow, info.Image, info.PackageFamilyName);
+            Interlocked.Increment(ref _held);
+            Images.RequestVerification(info.Image, decision.Needs);
+            return;
+        }
 
         // Both answers are remembered now, because they lead to different work: a refused socket's
         // datagrams are dropped where they are found, and a proxied socket's are carried. What is
         // still not remembered is every other socket on the machine, which would be both larger and
         // a description of what the user is doing.
-        var action = _engine().Decide(flow).Action;
-
-        if (action is RouteAction.Block or RouteAction.Proxy)
+        if (decision.Action is RouteAction.Block or RouteAction.Proxy)
         {
-            _udpPortOwners[socket.LocalPort] = new UdpSocketDecision(socket.ProcessId, action);
+            _udpPortOwners[socket.LocalPort] = new UdpSocketDecision(socket.ProcessId, decision.Action);
         }
     }
+
+    /// <summary>
+    /// The evidence a flow is decided on: what the catalog already has for the image, plus the package
+    /// family from the token. Never waits for a verification.
+    /// </summary>
+    private ImageEvidence? EvidenceFor(in ProcessInfo info, RuleEngine engine) =>
+        Images is not null && info.Image is not null
+            ? Images.EvidenceFor(info.Image, info.PackageFamilyName, engine.Snapshot.NeedsProductName)
+            : info.PackageFamilyName is null ? null : new ImageEvidence
+            {
+                ExecutablePath = info.ExecutablePath,
+                PackageFamilyName = info.PackageFamilyName,
+            };
 
     private void HandleConnect(in WinDivertAddress address)
     {
@@ -467,11 +576,13 @@ public sealed class DivertPipeline : IAsyncDisposable
         }
 
         var isSelf = socket.ProcessId == _selfProcessId;
-        var path = isSelf ? string.Empty : _processes.Resolve(socket.ProcessId);
+        var info = isSelf ? default : _processes.ResolveInfo(socket.ProcessId);
+        var path = info.ExecutablePath ?? string.Empty;
         var remote = SocketAddressReader.ReadRemote(address);
         var local = SocketAddressReader.ReadLocal(address);
         var remoteText = remote.ToString();
         var hostname = _dns.Lookup(remote);
+        var engine = _engine();
 
         var flow = new FlowDescriptor(
             socket.ProcessId,
@@ -480,46 +591,204 @@ public sealed class DivertPipeline : IAsyncDisposable
             socket.RemotePort,
             FlowProtocol.Tcp,
             hostname,
-            isSelf);
+            isSelf,
+            isSelf ? null : EvidenceFor(info, engine));
 
-        var engine = _engine();
-        var decision = engine.Decide(flow);
+        var decision = engine.Decide(flow, out var rule);
 
+        if (decision.Reason == RouteReasonKind.IdentityPending && Images is not null && info.Image is not null)
+        {
+            // Held, not decided. The SYN that follows is dropped until the image is verified; the
+            // retransmission a second later meets whatever the answer turned out to be.
+            _nat.RecordVerdict(socket.LocalPort, remote, socket.RemotePort, NatVerdict.Pending);
+            _pendingTcp[socket.LocalPort] = new PendingConnection(flow, local, remote, info.Image, info.PackageFamilyName);
+            Interlocked.Increment(ref _held);
+            Images.RequestVerification(info.Image, decision.Needs);
+            SplitLaneLog.Debug(
+                LogCategory,
+                $"HOLD {ExecutablePath.FileName(path)} :{socket.LocalPort} -> {flow.DestinationDisplay} ({decision.Explain()})");
+            return;
+        }
+
+        RecordTcpDecision(socket.LocalPort, local, remote, flow, decision, rule, engine);
+    }
+
+    /// <summary>Records what the packet loop must do with a connection's packets.</summary>
+    private void RecordTcpDecision(
+        ushort localPort,
+        IPAddress local,
+        IPAddress remote,
+        in FlowDescriptor flow,
+        RouteDecision decision,
+        AppRule? rule,
+        RuleEngine engine)
+    {
         switch (decision.Action)
         {
             case RouteAction.Proxy:
-                engine.Snapshot.TryGetRule(path, out var rule, out _);
-                _nat.Record(socket.LocalPort, NatTable.EntryFor(
-                    local, remote, socket.RemotePort, socket.ProcessId, path, rule, hostname,
+                _nat.Record(localPort, NatTable.EntryFor(
+                    local, remote, flow.RemotePort, flow.ProcessId, flow.ExecutablePath, rule, flow.RemoteHostname,
                     DateTimeOffset.UtcNow));
                 _statistics.CountProxied();
                 SplitLaneLog.Debug(
                     LogCategory,
-                    $"PROXY {ExecutablePath.FileName(path)} :{socket.LocalPort} -> " +
-                    $"{flow.DestinationDisplay}");
+                    $"PROXY {ExecutablePath.FileName(flow.ExecutablePath)} :{localPort} -> " +
+                    $"{flow.DestinationDisplay} ({decision.Explain()})");
                 break;
 
             case RouteAction.Block:
-                _nat.RecordDirect(socket.LocalPort, remote, socket.RemotePort);
+                // Dropped by the packet loop. This used to be recorded as "leave alone", which counted
+                // a blocked TCP connection as blocked and then let it out.
+                _nat.RecordVerdict(localPort, remote, flow.RemotePort, NatVerdict.Block);
                 _statistics.CountBlocked();
+                SplitLaneLog.Debug(
+                    LogCategory,
+                    $"BLOCK {ExecutablePath.FileName(flow.ExecutablePath)} :{localPort} -> " +
+                    $"{flow.DestinationDisplay} ({decision.Explain()})");
                 break;
 
             default:
                 // Recorded even though nothing is redirected. The packet loop reads the absence of a
                 // decision as "not decided yet" and waits; without this every connection an
                 // unselected application opens pays that wait in full, for an answer already given.
-                _nat.RecordDirect(socket.LocalPort, remote, socket.RemotePort);
+                _nat.RecordDirect(localPort, remote, flow.RemotePort);
                 _statistics.CountDirect();
                 if (engine.Snapshot.LogsDirectFlows)
                 {
                     SplitLaneLog.Debug(
                         LogCategory,
-                        $"DIRECT {ExecutablePath.FileName(path)} -> {flow.DestinationDisplay} ({decision.Explain()})");
+                        $"DIRECT {ExecutablePath.FileName(flow.ExecutablePath)} -> {flow.DestinationDisplay} ({decision.Explain()})");
                 }
 
                 break;
         }
     }
+
+    /// <summary>
+    /// Decides again everything that was held for an image, now that its evidence is complete.
+    /// </summary>
+    /// <remarks>
+    /// Runs on a verification worker, concurrently with the socket pump and the packet loop. Every
+    /// write is conditional on the held state still being there: a socket that closed, or a port that
+    /// now belongs to another connection, is left to whatever owns it now.
+    /// </remarks>
+    private void OnImageVerified(ImageRecord record)
+    {
+        if (!_running || Images is not { } images)
+        {
+            return;
+        }
+
+        var engine = _engine();
+        var released = 0;
+
+        foreach (var (port, pending) in _pendingTcp)
+        {
+            if (!ReferenceEquals(pending.Image, record))
+            {
+                continue;
+            }
+
+            var flow = pending.Flow with
+            {
+                Image = images.EvidenceFor(record, pending.PackageFamily, engine.Snapshot.NeedsProductName),
+            };
+
+            var decision = engine.Decide(flow, out var rule);
+            if (decision.Reason == RouteReasonKind.IdentityPending)
+            {
+                // Something else is still needed - a hash after the signature. Stay held.
+                images.RequestVerification(record, decision.Needs);
+                continue;
+            }
+
+            if (!_pendingTcp.TryRemove(new KeyValuePair<ushort, PendingConnection>(port, pending)) ||
+                !_nat.TryResolvePending(port, pending.Remote, flow.RemotePort))
+            {
+                continue;
+            }
+
+            RecordTcpDecision(port, pending.Local, pending.Remote, flow, decision, rule, engine);
+            released++;
+        }
+
+        foreach (var (port, pending) in _pendingUdp)
+        {
+            if (!ReferenceEquals(pending.Image, record))
+            {
+                continue;
+            }
+
+            var flow = pending.Flow with
+            {
+                Image = images.EvidenceFor(record, pending.PackageFamily, engine.Snapshot.NeedsProductName),
+            };
+
+            var decision = engine.Decide(flow);
+            if (decision.Reason == RouteReasonKind.IdentityPending)
+            {
+                images.RequestVerification(record, decision.Needs);
+                continue;
+            }
+
+            if (!_pendingUdp.TryRemove(new KeyValuePair<ushort, PendingBind>(port, pending)))
+            {
+                continue;
+            }
+
+            if (decision.Action is RouteAction.Block or RouteAction.Proxy)
+            {
+                _udpPortOwners[port] = new UdpSocketDecision(flow.ProcessId, decision.Action);
+            }
+            else
+            {
+                _udpPortOwners.TryRemove(port, out _);
+            }
+
+            released++;
+        }
+
+        Interlocked.Add(ref _released, released);
+        ReportVerification(record, engine, released);
+    }
+
+    /// <summary>
+    /// Says, once per file version, what verification established and what it meant for routing.
+    /// </summary>
+    /// <remarks>
+    /// The one log line an administrator needs when a selected application is not being routed: which
+    /// file, who signed it, which rule it did or did not satisfy, and why.
+    /// </remarks>
+    internal static void ReportVerification(ImageRecord record, RuleEngine engine, int released)
+    {
+        var evidence = record.Evidence;
+        var probe = new FlowDescriptor(0, record.Path, "203.0.113.1", 443, FlowProtocol.Tcp, Image: evidence);
+        var decision = engine.Decide(probe, out var rule);
+        var signer = evidence.Signature switch
+        {
+            SignatureStatus.Valid => $"signed by {evidence.SignerName}",
+            SignatureStatus.Unsigned => "unsigned",
+            SignatureStatus.Invalid => "signature does not verify",
+            _ => "signature not checked",
+        };
+
+        var line =
+            $"{record.Path}: {signer} ({record.VerificationTime.TotalMilliseconds:0} ms) -> " +
+            $"{decision.Action} ({decision.Explain()})" +
+            (rule is not null ? $", rule '{rule.Identity.DisplayName}'" : string.Empty) +
+            (released > 0 ? $", released {released} held" : string.Empty);
+
+        if (decision.Reason == RouteReasonKind.IdentityMismatch)
+        {
+            SplitLaneLog.Warning(IdentityLogCategory, line + " - select the application again if this is an update");
+        }
+        else
+        {
+            SplitLaneLog.Info(IdentityLogCategory, line);
+        }
+    }
+
+    private const string IdentityLogCategory = "identity";
 
     // ---- Packet layer -----------------------------------------------------------------------
 
@@ -539,10 +808,15 @@ public sealed class DivertPipeline : IAsyncDisposable
                         return;
                     }
 
-                    if (++failures is 1 or 100 or 1000)
+                    if (++failures is 1 or 100 or FailuresBeforeFault)
                     {
                         SplitLaneLog.Error(
                             LogCategory, $"packet receive failed (Win32 {error}), {failures} so far");
+                    }
+
+                    if (failures == FailuresBeforeFault)
+                    {
+                        Fault($"the packet layer refused {FailuresBeforeFault} receives in a row (Win32 {error})");
                     }
 
                     Thread.Sleep(failures < 100 ? 1 : 50);
@@ -583,6 +857,7 @@ public sealed class DivertPipeline : IAsyncDisposable
         catch (Exception ex) when (_running)
         {
             SplitLaneLog.Error(LogCategory, "packet loop stopped", ex);
+            Fault($"the packet loop stopped: {ex.Message}");
         }
     }
 
@@ -667,6 +942,26 @@ public sealed class DivertPipeline : IAsyncDisposable
         if (view.IsTcpSyn && !HasDecision(view))
         {
             WaitForDecision(view);
+        }
+
+        // A connection held for verification, or refused, goes nowhere. Checked against the recorded
+        // destination as well as the port, for the same reason HasDecision is: a stale row must not
+        // answer for a different connection.
+        if (_nat.TryGetVerdict(view.SourcePort, out var verdictDestination, out var verdictPort, out var verdict) &&
+            verdict != NatVerdict.Direct &&
+            verdictPort == view.DestinationPort &&
+            AddressMatches(view.DestinationAddress, verdictDestination))
+        {
+            if (verdict == NatVerdict.Pending)
+            {
+                Interlocked.Increment(ref _heldPacketsDropped);
+            }
+            else
+            {
+                Interlocked.Increment(ref _refusedPacketsDropped);
+            }
+
+            return PacketAction.Drop;
         }
 
         // Application traffic that a socket-layer decision already marked for the proxy lane.
@@ -934,6 +1229,11 @@ public sealed class DivertPipeline : IAsyncDisposable
 
         _running = false;
 
+        if (Images is not null)
+        {
+            Images.Verified -= OnImageVerified;
+        }
+
         // Shutdown before close: a thread parked inside WinDivertRecv must be released first, and
         // closing the handle underneath it is not defined behaviour.
         _heartbeat?.Dispose();
@@ -966,6 +1266,8 @@ public sealed class DivertPipeline : IAsyncDisposable
 
         _udpPortOwners.Clear();
         _udpOrigins.Clear();
+        _pendingTcp.Clear();
+        _pendingUdp.Clear();
         _lanePool?.Dispose();
         _lanePool = null;
 
