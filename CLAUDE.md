@@ -72,7 +72,12 @@ SplitLaneProxyExtension/      Provider, FlowRouter, TCP, UDP, Runtime, Resources
 Tools/socks5-testbed/         Docker SOCKS5 server used by integration tests
 docs/, docs/adr/              Architecture, networking, threat model, decisions
 .claude/skills/               Project-local skills
+windows/                      Windows client (.NET, WinDivert); see below
 ```
+
+The Windows client in `windows/` has its own `windows/README.md` and `windows/CLAUDE.md`, which
+covers what differs on Windows. Its CI (`.github/workflows/windows.yml`) runs on the `windows` branch
+and on `v*` tags only, by design; work on the Windows client goes to that branch first.
 
 ## Build commands
 
