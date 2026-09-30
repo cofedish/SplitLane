@@ -117,6 +117,11 @@ and the packet path is a NAT-table lookup keyed on the source port. See `docs/NE
   software's traffic through user mode on a machine whose DNS runs through a local tunnel. Lanes now
   come from a block of ports reserved before the filter is built, and the filter names that block:
   618,646 packets in a minute became 8,315.
+- **The upstream is SOCKS5 or HTTP CONNECT, and neither is guessed** (`ProxyProtocolType`). An HTTP
+  proxy sent a SOCKS5 greeting says nothing until the timeout - that was the corporate-proxy "Timed
+  out". Every upstream failure is an `UpstreamProxyException` naming its stage; a new failure path
+  that surfaces as a bare timeout or "Internal error" is the bug. HTTP auth is Negotiate > NTLM >
+  Basic, SSPI with the configured account, never LocalSystem's. HTTP carries no UDP: refused.
 - Warnings are errors, project-wide.
 
 ## Commands
@@ -124,7 +129,7 @@ and the packet path is a NAT-table lookup keyed on the source port. See `docs/NE
 ```powershell
 cd windows
 dotnet build SplitLane.Windows.slnx
-dotnet test  SplitLane.Windows.slnx          # 586 tests, no network/driver/elevation needed
+dotnet test  SplitLane.Windows.slnx          # 672 tests, no network/driver/elevation needed
 
 SplitLane.Engine.exe --check                 # why the divert layer will not start
 SplitLane.Engine.exe --no-divert             # everything except interception
@@ -156,7 +161,7 @@ without changing the page.
 
 ## State
 
-Core, engine and app are written, build with zero warnings, and 586 tests pass. The app has been run,
+Core, engine and app are written, build with zero warnings, and 672 tests pass. The app has been run,
 driven end to end, and screenshotted. The engine has been run in `--no-divert` mode and its control
 channel, rule engine, redirect listener and SOCKS5 relay verified against a real proxy.
 

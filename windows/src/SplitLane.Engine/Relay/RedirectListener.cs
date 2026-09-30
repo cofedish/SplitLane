@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Sockets;
 using SplitLane.Core.Logging;
 using SplitLane.Core.Models;
+using SplitLane.Core.Proxy;
 using SplitLane.Core.Proxy.Socks5;
 using SplitLane.Core.Rules;
 using SplitLane.Engine.Flows;
@@ -18,7 +19,7 @@ namespace SplitLane.Engine.Relay;
 /// The divert layer rewrites a selected application's SYN so that it arrives here instead of at its
 /// real destination. This listener then answers the only question the rewrite destroyed — where was
 /// it going? — by looking the connection's source port up in the NAT table, and relays it through
-/// SOCKS5.
+/// the upstream, SOCKS5 or HTTP CONNECT.
 /// </para>
 /// <para>
 /// A connection whose source port is not in the table is <b>closed immediately</b>. That is not
@@ -34,6 +35,7 @@ public sealed class RedirectListener : IAsyncDisposable
     private readonly EngineStatistics _statistics;
     private readonly Func<ProxyConfiguration> _proxy;
     private readonly Func<Socks5Credential?> _credential;
+    private readonly UpstreamConnector _upstream;
     private readonly CancellationTokenSource _stopping = new();
     private readonly List<Socket> _listeners = [];
     private readonly List<Task> _acceptLoops = [];
@@ -43,12 +45,14 @@ public sealed class RedirectListener : IAsyncDisposable
         NatTable nat,
         EngineStatistics statistics,
         Func<ProxyConfiguration> proxy,
-        Func<Socks5Credential?> credential)
+        Func<Socks5Credential?> credential,
+        UpstreamConnector? upstream = null)
     {
         _nat = nat ?? throw new ArgumentNullException(nameof(nat));
         _statistics = statistics ?? throw new ArgumentNullException(nameof(statistics));
         _proxy = proxy ?? throw new ArgumentNullException(nameof(proxy));
         _credential = credential ?? throw new ArgumentNullException(nameof(credential));
+        _upstream = upstream ?? new UpstreamConnector();
     }
 
     private const string LogCategory = "redirect";
@@ -185,7 +189,7 @@ public sealed class RedirectListener : IAsyncDisposable
                 continue;
             }
 
-            // Each connection runs detached. One slow SOCKS5 handshake must not delay the next
+            // Each connection runs detached. One slow upstream handshake must not delay the next
             // application's connection.
             _ = Task.Run(() => HandleAsync(client, cancellationToken), CancellationToken.None);
         }
@@ -234,11 +238,9 @@ public sealed class RedirectListener : IAsyncDisposable
             _statistics.Record(record);
             _statistics.MarkLive(record.Id);
 
-            var destination = proxy.PreferHostnames
-                ? Socks5Address.Destination(entry.Hostname, entry.OriginalDestination.ToString())
-                : Socks5Address.Destination(null, entry.OriginalDestination.ToString());
+            var destination = UpstreamConnector.TargetHost(proxy, entry.Hostname, entry.OriginalDestination.ToString());
 
-            using var tunnel = await Socks5Client
+            using var tunnel = await _upstream
                 .ConnectAsync(proxy, destination, entry.OriginalDestinationPort, _credential(), cancellationToken)
                 .ConfigureAwait(false);
 
@@ -248,10 +250,11 @@ public sealed class RedirectListener : IAsyncDisposable
             SplitLaneLog.Debug(
                 LogCategory,
                 $"relaying {ExecutablePath.FileName(entry.ExecutablePath)} -> {destination}:{entry.OriginalDestinationPort} " +
-                $"via {proxy.Endpoint.DisplayString} ({tunnel.ElapsedMilliseconds:F0}ms handshake)");
+                $"via {proxy.Type.DisplayName()} {proxy.Endpoint.DisplayString} ({tunnel.ElapsedMilliseconds:F0}ms handshake" +
+                $"{(tunnel.AuthenticationScheme is { } scheme ? ", " + scheme : string.Empty)})");
 
             var result = await TcpRelay
-                .RunAsync(client, tunnel.Socket, tunnel.Info.LeftoverBytes, cancellationToken)
+                .RunAsync(client, tunnel.Socket, tunnel.LeftoverBytes, cancellationToken)
                 .ConfigureAwait(false);
 
             _statistics.AddTransferred(result.BytesSent, result.BytesReceived);
@@ -265,18 +268,25 @@ public sealed class RedirectListener : IAsyncDisposable
             };
             _statistics.Update(record);
         }
-        catch (Socks5Exception ex)
+        catch (UpstreamProxyException ex)
         {
             // Fail closed. The application's connection dies and the failure is visible, which is
             // the entire point: a silent fallback to DIRECT is a leak the user cannot see (ADR 0003).
-            SplitLaneLog.Warning(LogCategory, $"proxy handshake failed: {ex}");
+            // The line names the stage, the proxy and the destination, so "Timed out" says whose.
+            if (ex.Category != ConnectionErrorCategory.Cancelled)
+            {
+                SplitLaneLog.Warning(
+                    LogCategory,
+                    $"{ExecutablePath.FileName(record?.ExecutablePath ?? string.Empty)}: {ex.Category}: {ex.Describe()}");
+            }
 
             if (record is not null)
             {
                 _statistics.Update(record with
                 {
                     State = ConnectionState.Failed,
-                    Error = ex.Code.ToCategory(),
+                    Error = ex.Category,
+                    ErrorDetail = ex.Describe(),
                     Duration = Stopwatch.GetElapsedTime(started),
                 });
             }

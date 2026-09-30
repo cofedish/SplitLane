@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Net.Sockets;
 using SplitLane.Core.Models;
+using SplitLane.Core.Proxy;
 using SplitLane.Core.Proxy.Socks5;
 
 namespace SplitLane.Engine.Relay;
@@ -52,19 +53,18 @@ public static class Socks5Client
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(proxy.HandshakeTimeoutMilliseconds);
 
-        var socket = new Socket(SocketType.Stream, ProtocolType.Tcp);
+        Socket? socket = null;
+        var stage = UpstreamStage.Resolve;
+        Socks5Negotiator? negotiator = null;
 
         try
         {
-            // Nagle would coalesce the greeting with nothing and add a round trip's worth of latency
-            // to every single relayed connection.
-            socket.NoDelay = true;
-
-            await socket.ConnectAsync(proxy.Endpoint.Host, proxy.Endpoint.Port, timeout.Token)
+            socket = await UpstreamSocket.ConnectAsync(proxy.Endpoint, s => stage = s, timeout.Token)
                 .ConfigureAwait(false);
 
-            var negotiator = new Socks5Negotiator(destination, destinationPort, credential, command);
+            negotiator = new Socks5Negotiator(destination, destinationPort, credential, command);
             var step = negotiator.Start();
+            stage = StageOf(negotiator);
             var buffer = new byte[HandshakeBufferSize];
 
             while (true)
@@ -89,6 +89,7 @@ public static class Socks5Client
                         }
 
                         step = negotiator.Receive(buffer.AsSpan(0, read));
+                        stage = StageOf(negotiator);
                         break;
 
                     case Socks5StepKind.Established:
@@ -105,17 +106,32 @@ public static class Socks5Client
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
             socket?.Dispose();
-            throw Socks5Exception.TimedOut();
+            throw new Socks5Exception(Socks5ErrorCode.TimedOut, TimeoutMessage(stage, proxy.HandshakeTimeoutMilliseconds))
+            {
+                Stage = stage,
+            };
         }
         catch (OperationCanceledException)
         {
             socket?.Dispose();
-            throw Socks5Exception.Cancelled();
+            var cancelled = Socks5Exception.Cancelled();
+            cancelled.Stage = stage;
+            throw cancelled;
         }
         catch (SocketException ex)
         {
             socket?.Dispose();
-            throw Socks5Exception.Transport(ex.SocketErrorCode.ToString(), ex);
+            var transport = stage == UpstreamStage.Resolve
+                ? Socks5Exception.Transport($"the proxy's name {proxy.Endpoint.Host} did not resolve ({ex.SocketErrorCode})", ex)
+                : Socks5Exception.Transport(ex.SocketErrorCode.ToString(), ex);
+            transport.Stage = stage;
+            throw transport;
+        }
+        catch (Socks5Exception ex)
+        {
+            socket?.Dispose();
+            ex.Stage ??= negotiator is null ? stage : StageOf(negotiator, stage);
+            throw;
         }
         catch
         {
@@ -123,6 +139,36 @@ public static class Socks5Client
             throw;
         }
     }
+
+    /// <summary>What the handshake is waiting for, as a stage.</summary>
+    private static UpstreamStage StageOf(Socks5Negotiator negotiator, UpstreamStage fallback = UpstreamStage.Greeting)
+        => negotiator.CurrentState switch
+        {
+            Socks5Negotiator.State.AwaitingMethodSelection => UpstreamStage.Greeting,
+            Socks5Negotiator.State.AwaitingAuthenticationReply => UpstreamStage.Authentication,
+            Socks5Negotiator.State.AwaitingConnectReply or Socks5Negotiator.State.Established => UpstreamStage.Connect,
+            _ => fallback,
+        };
+
+    /// <summary>
+    /// Says which wait ran out, because each has a different cause.
+    /// </summary>
+    /// <remarks>
+    /// The greeting case is the one worth spelling out. A proxy that accepts TCP and then says
+    /// nothing at all to a SOCKS5 greeting is, in practice, an HTTP proxy: it is waiting for the end
+    /// of a request line. This is how a corporate HTTP proxy configured as SOCKS5 fails, and the only
+    /// symptom it has.
+    /// </remarks>
+    internal static string TimeoutMessage(UpstreamStage stage, int budgetMilliseconds) => stage switch
+    {
+        UpstreamStage.Resolve => $"Resolving the proxy's name did not finish within {budgetMilliseconds} ms",
+        UpstreamStage.TcpConnect => $"The proxy did not accept a TCP connection within {budgetMilliseconds} ms",
+        UpstreamStage.Greeting =>
+            $"The proxy accepted the connection and did not answer the SOCKS5 greeting within {budgetMilliseconds} ms. " +
+            "An HTTP proxy behaves exactly like this; if it is one, set the proxy type to HTTP",
+        UpstreamStage.Authentication => $"The proxy did not answer the SOCKS5 authentication within {budgetMilliseconds} ms",
+        _ => $"The proxy did not answer the SOCKS5 CONNECT within {budgetMilliseconds} ms",
+    };
 
     /// <summary>Writes a buffer completely, because a partial send during a handshake desynchronises it.</summary>
     private static async Task SendAllAsync(Socket socket, byte[] bytes, CancellationToken cancellationToken)

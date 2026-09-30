@@ -65,6 +65,16 @@ public sealed class UdpAssociation : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(proxy);
         ArgumentNullException.ThrowIfNull(onDatagram);
 
+        // The rule engine already refuses UDP for an upstream that cannot carry it. A socket decided
+        // before the proxy was changed to HTTP can still arrive here, and the answer is the same:
+        // dropped, not an association attempt that would hang until its timeout.
+        if (!proxy.Type.CarriesDatagrams())
+        {
+            throw new Socks5Exception(
+                Socks5ErrorCode.ProtocolViolation,
+                $"an {proxy.Type.DisplayName()} proxy cannot relay datagrams");
+        }
+
         // Zeros for the address datagrams will come from. RFC 1928 allows it, and it is the honest
         // answer: the local port is not chosen until the socket below is bound, and a proxy that
         // pinned the association to an address would reject every datagram after a rebind anyway.

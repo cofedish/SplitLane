@@ -13,10 +13,26 @@
                         <TextBlock Text="Upstream" Style="{StaticResource CardTitle}" />
                         <Border Style="{StaticResource Badge}" HorizontalAlignment="Right"
                                 Background="{DynamicResource AccentTintBrush}">
-                            <TextBlock Text="SOCKS5" Style="{StaticResource BadgeText}"
+                            <TextBlock Text="{Binding TypeBadge}" Style="{StaticResource BadgeText}"
+                                       AutomationProperties.AutomationId="ProxyTypeBadge"
                                        Foreground="{DynamicResource AccentBrush}" />
                         </Border>
                     </Grid>
+
+                    <StackPanel Margin="0,18,0,0">
+                        <TextBlock Text="Protocol" Style="{StaticResource FieldLabel}" />
+                        <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                            <RadioButton Style="{StaticResource Segment}" Content="SOCKS5" GroupName="ProxyType" Margin="0,0,22,0"
+                                         AutomationProperties.AutomationId="ProxyTypeSocks5"
+                                         IsChecked="{Binding IsSocks5, Mode=TwoWay}" />
+                            <RadioButton Style="{StaticResource Segment}" Content="HTTP (CONNECT)" GroupName="ProxyType"
+                                         AutomationProperties.AutomationId="ProxyTypeHttp"
+                                         IsChecked="{Binding IsHttp, Mode=TwoWay}" />
+                        </StackPanel>
+                        <TextBlock Style="{StaticResource BodyText}" Margin="0,8,0,0"
+                                   AutomationProperties.AutomationId="ProxyUdpNote"
+                                   Text="{Binding UdpNote}" />
+                    </StackPanel>
 
                     <Grid Margin="0,18,0,0">
                         <Grid.ColumnDefinitions>
@@ -59,7 +75,7 @@
                             <TextBox Style="{StaticResource Field}"
                                      AutomationProperties.AutomationId="ProxyTimeout"
                                      Text="{Binding TimeoutSeconds, UpdateSourceTrigger=PropertyChanged}"
-                                     ToolTip="Budget for TCP connect plus the whole SOCKS5 handshake. From the application's point of view these are one wait." />
+                                     ToolTip="Budget for reaching the proxy plus the whole handshake, authentication included. From the application's point of view these are one wait; a failure still names the stage that ran out." />
                         </StackPanel>
                     </Grid>
 
@@ -107,7 +123,8 @@
                             <TextBlock Text="Authentication" Style="{StaticResource CardTitle}" />
                             <TextBlock Style="{StaticResource BodyText}" Margin="0,6,0,0" MaxWidth="560"
                                        HorizontalAlignment="Left"
-                                       Text="Username and password, RFC 1929. The password is encrypted for this machine and stored outside the configuration file — SplitLane can tell you one exists, never what it is." />
+                                       AutomationProperties.AutomationId="AuthenticationSummary"
+                                       Text="{Binding AuthenticationSummary}" />
                         </StackPanel>
                         <ToggleButton Style="{StaticResource Switch}" HorizontalAlignment="Right"
                                       VerticalAlignment="Top"
@@ -148,7 +165,7 @@
                                 Visibility="{Binding PlaintextWarningVisible, Converter={StaticResource BoolToVisible}}">
                             <TextBlock TextWrapping="Wrap" FontSize="12.5"
                                        Foreground="{DynamicResource TextBrush}"
-                                       Text="This proxy is not on this machine. SOCKS5 sends the username and password unencrypted, so they will cross the network in the clear." />
+                                       Text="{Binding PlaintextWarning}" />
                         </Border>
                     </StackPanel>
                 </StackPanel>

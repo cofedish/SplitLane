@@ -239,6 +239,49 @@ public sealed class RuleEngineTests
     }
 
     [Fact]
+    public void SelectedApplicationUdpIsRefusedWhenTheUpstreamIsAnHttpProxy()
+    {
+        // HTTP CONNECT is a byte stream. With UDP relaying left on, the datagrams still have nowhere
+        // to go but the proxy, and the proxy cannot take them: refused, never DIRECT.
+        var engine = new RuleEngine(new RuntimeConfiguration
+        {
+            Rules = [new AppRule { Identity = Identity(CodexPath) }],
+            ProxiesUdp = true,
+            Proxy = ProxyConfiguration.Default with { Type = ProxyProtocolType.Http },
+        });
+
+        var udp = engine.Decide(Flow(CodexPath, protocol: FlowProtocol.Udp));
+
+        Assert.Equal(RouteAction.Block, udp.Action);
+        Assert.Equal(RouteReasonKind.UdpNotSupported, udp.Reason);
+        Assert.Equal(RouteAction.Proxy, engine.Decide(Flow(CodexPath)).Action);
+    }
+
+    [Fact]
+    public void EngineTrafficToAnOffMachineHttpProxyIsDirectWithTheLoopbackRuleOutOfPlay()
+    {
+        // The loop this prevents: the engine dials the proxy, the divert layer sees the engine's own
+        // connection, and redirects it back into the engine. The proxy is off this machine, so the
+        // loopback rule is no help; the self-traffic check is what stops it, whatever the rules say.
+        // The flag is set by the divert layer from the socket's process id
+        // (DivertPipeline.HandleConnect), which needs the driver and is not reachable from here.
+        var engine = new RuleEngine(new RuntimeConfiguration
+        {
+            Rules = [new AppRule { Identity = Identity(CodexPath) }],
+            Proxy = ProxyConfiguration.Default with
+            {
+                Type = ProxyProtocolType.Http,
+                Endpoint = new ProxyEndpoint { Host = "10.20.30.40", Port = 3128 },
+            },
+        });
+
+        var decision = engine.Decide(Flow(CodexPath, "10.20.30.40", 3128) with { IsEngineTraffic = true });
+
+        Assert.Equal(RouteAction.Direct, decision.Action);
+        Assert.Equal(RouteReasonKind.EngineSelfTraffic, decision.Reason);
+    }
+
+    [Fact]
     public void SelectedApplicationUdpIsNeverPassedThroughEitherWay()
     {
         // The promise that does not change with the setting. Whatever else happens to a selected

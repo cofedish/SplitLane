@@ -106,6 +106,13 @@ public sealed record RuntimeConfiguration
     public bool ProxiesUdp { get; init; } = true;
 
     /// <summary>
+    /// Whether a selected application's UDP is actually relayed: asked for, and carried by the
+    /// upstream's protocol. An HTTP proxy carries none, so its applications' datagrams are refused.
+    /// </summary>
+    [JsonIgnore]
+    public bool RelaysUdp => ProxiesUdp && Proxy.Type.CarriesDatagrams();
+
+    /// <summary>
     /// Local TCP port the redirector listens on, or 0 to pick an ephemeral port at start.
     /// </summary>
     /// <remarks>

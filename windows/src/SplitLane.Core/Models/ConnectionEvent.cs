@@ -62,6 +62,21 @@ public enum ConnectionErrorCategory
 
     /// <summary>A bug, or a protocol violation by the upstream.</summary>
     InternalError = 8,
+
+    /// <summary>
+    /// The proxy was reached and accepted the request, and could not reach the destination itself.
+    /// Kept apart from <see cref="UpstreamUnreachable"/> because the proxy is working.
+    /// </summary>
+    DestinationUnreachable = 9,
+
+    /// <summary>
+    /// The proxy answered in a different protocol: an HTTP proxy configured as SOCKS5, or the
+    /// reverse.
+    /// </summary>
+    ProtocolMismatch = 10,
+
+    /// <summary>The proxy wants credentials and none are configured.</summary>
+    AuthenticationRequired = 11,
 }
 
 /// <summary>Human-readable text for the closed error vocabulary.</summary>
@@ -79,10 +94,31 @@ public static class ConnectionErrorCategoryExtensions
         ConnectionErrorCategory.FlowError => "Flow error",
         ConnectionErrorCategory.Cancelled => "Cancelled",
         ConnectionErrorCategory.InternalError => "Internal error",
+        ConnectionErrorCategory.DestinationUnreachable => "Proxy could not reach the destination",
+        ConnectionErrorCategory.ProtocolMismatch => "Proxy speaks a different protocol",
+        ConnectionErrorCategory.AuthenticationRequired => "Proxy requires credentials",
         _ => "Unknown error",
     };
 
-    /// <summary>Maps a SOCKS5 failure onto a user-facing category.</summary>
+    /// <summary>
+    /// Maps a SOCKS5 failure onto a user-facing category, using the reply code to tell a proxy that
+    /// refused from one whose own attempt to reach the destination failed.
+    /// </summary>
+    public static ConnectionErrorCategory ToCategory(this Socks5Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+
+        return exception.ReplyCode switch
+        {
+            Socks5ReplyCode.NetworkUnreachable
+                or Socks5ReplyCode.HostUnreachable
+                or Socks5ReplyCode.ConnectionRefused
+                or Socks5ReplyCode.TtlExpired => ConnectionErrorCategory.DestinationUnreachable,
+            _ => exception.Code.ToCategory(),
+        };
+    }
+
+    /// <summary>Maps a SOCKS5 failure code onto a user-facing category.</summary>
     public static ConnectionErrorCategory ToCategory(this Socks5ErrorCode code) => code switch
     {
         Socks5ErrorCode.TransportFailure or Socks5ErrorCode.IncompleteResponse
@@ -91,8 +127,9 @@ public static class ConnectionErrorCategoryExtensions
             => ConnectionErrorCategory.AuthenticationFailed,
         Socks5ErrorCode.NoAcceptableAuthenticationMethod
             or Socks5ErrorCode.UnsupportedAuthenticationMethod
-            or Socks5ErrorCode.AuthenticationRequired
             => ConnectionErrorCategory.AuthenticationUnsupported,
+        Socks5ErrorCode.AuthenticationRequired => ConnectionErrorCategory.AuthenticationRequired,
+        Socks5ErrorCode.UnexpectedVersion => ConnectionErrorCategory.ProtocolMismatch,
         Socks5ErrorCode.RequestRejected or Socks5ErrorCode.UnknownReplyCode
             => ConnectionErrorCategory.RejectedByProxy,
         Socks5ErrorCode.TimedOut => ConnectionErrorCategory.TimedOut,
@@ -158,6 +195,12 @@ public sealed record ConnectionEvent
 
     /// <summary>Set when the connection ended badly.</summary>
     public ConnectionErrorCategory? Error { get; init; }
+
+    /// <summary>
+    /// The failure in full - stage, proxy, elapsed time, HTTP status, scheme, socket error - when the
+    /// upstream refused or failed. Display-safe: built from those fields, never from a credential.
+    /// </summary>
+    public string? ErrorDetail { get; init; }
 
     /// <summary>Set when the connection reaches a terminal state.</summary>
     public TimeSpan? Duration { get; init; }

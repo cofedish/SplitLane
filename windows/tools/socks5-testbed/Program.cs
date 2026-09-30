@@ -1,6 +1,7 @@
 using SplitLane.Testbed.Socks5;
 
-// A SOCKS5 server that logs every CONNECT, and can answer as the origin as well.
+// A SOCKS5 server that logs every CONNECT, and can answer as the origin as well - or, with --http,
+// an HTTP CONNECT proxy.
 //
 // The log is how interception is proved: it is the upstream's own account of what it was asked to
 // reach. Answering as the origin is what makes a load test unambiguous - requests can then be aimed
@@ -18,6 +19,29 @@ Console.CancelKeyPress += (_, eventArgs) =>
     eventArgs.Cancel = true;
     stopping.TrySetResult();
 };
+
+// --http: an HTTP CONNECT proxy instead, with Basic authentication under --auth. It reads each
+// request to its blank line before answering, as real proxies do.
+if (args.Contains("--http", StringComparer.OrdinalIgnoreCase))
+{
+    await using var http = new HttpProxyTestServer(new HttpProxyTestServerOptions
+    {
+        Basic = requireAuth ? ("splitlane", "testbed") : null,
+    });
+
+    http.ConnectRequested += target => Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] CONNECT {target}");
+
+    Console.WriteLine($"HTTP proxy testbed listening on 127.0.0.1:{http.Port}");
+    if (requireAuth)
+    {
+        Console.WriteLine("Basic authentication required — username 'splitlane', password 'testbed'");
+    }
+
+    Console.WriteLine("Press Ctrl+C to stop.");
+    await stopping.Task;
+    Console.WriteLine($"Accepted {http.AcceptedConnections} connections.");
+    return;
+}
 
 await using var server = new Socks5TestServer(new Socks5TestServerOptions
 {

@@ -219,6 +219,13 @@ that a password exists; it has no path to read one back.
 RFC 1929 still sends the credential to the proxy unencrypted. On loopback that is irrelevant; to a
 remote proxy it is not, and the Proxy page warns when the endpoint is not loopback.
 
+An HTTP upstream's Basic scheme is the same exposure. NTLM and Negotiate never send the password, and
+SplitLane prefers them whenever the proxy offers them; Basic is used only when it is all the proxy
+offers. `Proxy-Authorization` values are built in the request and go nowhere else - no log line,
+exception message, Activity entry or IPC field has room for one. The CONNECT target is written only
+if it is a plain hostname or an address literal: names come from sniffed DNS answers, whose labels
+can hold CR and LF, and one written unchecked could add headers to the request.
+
 ### W-10 — The managed policy is trusted by its owner and permissions
 
 **Severity: designed for. Not verified on a live install.**

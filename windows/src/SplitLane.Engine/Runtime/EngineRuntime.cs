@@ -3,6 +3,7 @@ using SplitLane.Core.Configuration;
 using SplitLane.Core.Ipc;
 using SplitLane.Core.Logging;
 using SplitLane.Core.Models;
+using SplitLane.Core.Proxy;
 using SplitLane.Core.Proxy.Socks5;
 using SplitLane.Core.Rules;
 using SplitLane.Engine.Divert;
@@ -74,6 +75,7 @@ public sealed class EngineRuntime : IAsyncDisposable
     private RuntimeConfiguration _userConfiguration = RuntimeConfiguration.Empty;
     private PolicyLoad _policy = new(null, PolicyState.None, "no policy loaded");
     private Socks5Credential? _credential;
+    private readonly UpstreamConnector _upstream = new();
     private RedirectListener? _listener;
     private DivertPipeline? _pipeline;
     private DivertState _state = DivertState.Stopped;
@@ -484,7 +486,8 @@ public sealed class EngineRuntime : IAsyncDisposable
                 _nat,
                 _statistics,
                 () => _configuration.Proxy,
-                () => _credential)
+                () => _credential,
+                _upstream)
             {
                 // When redirecting to the machine's own address rather than loopback, the listener
                 // has to be reachable at that address. See the property's own remarks for what that
@@ -501,6 +504,10 @@ public sealed class EngineRuntime : IAsyncDisposable
                     Images = _images,
                     UseLoopbackRedirect = _options.UseLoopbackRedirect,
                     TraceRedirects = _options.TraceRedirects,
+                    // The user's setting, not the effective one: the lanes are reserved once, when
+                    // routing starts, and switching the upstream from HTTP to SOCKS5 must not leave
+                    // them missing until the next restart. With an HTTP upstream the rule engine
+                    // refuses the datagrams (RelaysUdp) and the lanes sit unused.
                     ProxiesUdp = _configuration.ProxiesUdp,
                     Proxy = () => _configuration.Proxy,
                     Credential = () => _credential,
@@ -752,7 +759,8 @@ public sealed class EngineRuntime : IAsyncDisposable
     }
 
     /// <summary>
-    /// Verifies the upstream is reachable and speaks SOCKS5.
+    /// Verifies the upstream is reachable, speaks the configured protocol, and accepts the
+    /// credentials.
     /// </summary>
     /// <remarks>
     /// Run inside the engine rather than the app, because the app's own connection to the proxy
@@ -766,37 +774,64 @@ public sealed class EngineRuntime : IAsyncDisposable
 
         try
         {
-            var stopwatch = Stopwatch.StartNew();
-
-            // A CONNECT to a destination that is refused still proves reachability and
-            // authentication, which is what the test is for. Only a transport or auth failure is
-            // reported as a failure.
-            using var tunnel = await Socks5Client.ConnectAsync(
+            // A tunnel to a destination that is refused still proves reachability and
+            // authentication, which is what the test is for. 443, because it is the one port every
+            // HTTP proxy allows CONNECT to; a refusal of port 80 would prove less.
+            using var tunnel = await _upstream.ConnectAsync(
                 proxy,
-                Socks5Address.FromDomain("splitlane.invalid"),
-                80,
+                "splitlane.invalid",
+                443,
                 _credential,
                 cancellationToken).ConfigureAwait(false);
 
-            stopwatch.Stop();
-            return new ProxyTestResult(true, stopwatch.Elapsed.TotalMilliseconds, "Proxy reachable, handshake accepted.");
+            return new ProxyTestResult(
+                true,
+                tunnel.ElapsedMilliseconds,
+                $"{proxy.Type.DisplayName()} proxy reachable, tunnel accepted" +
+                (tunnel.AuthenticationScheme is { } scheme ? $", authenticated with {scheme}." : "."));
         }
-        catch (Socks5Exception ex) when (ex.Code == Socks5ErrorCode.RequestRejected)
+        catch (UpstreamProxyException ex) when (IsHealthyRefusal(ex))
         {
-            // Reached it, authenticated, and it declined the deliberately bogus destination. That is
-            // a healthy proxy.
-            return new ProxyTestResult(true, null, $"Proxy reachable — it refused the probe destination ({ex.ReplyCode}).");
+            // Reached it, got past authentication, and it declined or could not reach the
+            // deliberately bogus destination. That is a healthy proxy.
+            return new ProxyTestResult(
+                true,
+                ex.ElapsedMilliseconds,
+                $"{proxy.Type.DisplayName()} proxy reachable - it refused the probe destination, as it should " +
+                (ex.StatusCode is { } status ? $"(HTTP {status})." : $"({ex.Message})."));
         }
-        catch (Socks5Exception ex)
+        catch (UpstreamProxyException ex)
         {
             _lastError = ex.Message;
-            return new ProxyTestResult(false, null, ex.Message);
+            return new ProxyTestResult(false, null, $"{ex.Category.Describe()}: {ex.Describe()}");
         }
         catch (Exception ex)
         {
             _lastError = ex.Message;
             return new ProxyTestResult(false, null, ex.Message);
         }
+    }
+
+    /// <summary>
+    /// Whether a refusal of the probe destination proves a working proxy.
+    /// </summary>
+    /// <remarks>
+    /// Only answers a proxy gives <i>about the destination</i>: it could not reach it (SOCKS5 host or
+    /// network unreachable, HTTP 502/503/504) or its policy will not allow it (SOCKS5 ruleset, HTTP
+    /// 403). A 400, 405 or 501 to CONNECT is what a web server, a PAC host or an admin port says when
+    /// it is not a proxy at all, and passing the test on that would send every real connection to it.
+    /// </remarks>
+    internal static bool IsHealthyRefusal(UpstreamProxyException ex)
+    {
+        ArgumentNullException.ThrowIfNull(ex);
+
+        if (ex.Stage != UpstreamStage.Connect)
+        {
+            return false;
+        }
+
+        return ex.Category == ConnectionErrorCategory.DestinationUnreachable ||
+            (ex.Category == ConnectionErrorCategory.RejectedByProxy && ex.StatusCode is null or 403);
     }
 
     /// <summary>Turns DIRECT-decision logging on or off without a configuration round-trip.</summary>

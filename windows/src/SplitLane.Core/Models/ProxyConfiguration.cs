@@ -3,14 +3,42 @@ using SplitLane.Core.Rules;
 
 namespace SplitLane.Core.Models;
 
-/// <summary>
-/// Upstream proxy protocol. Only SOCKS5 is implemented; the enum exists so that adding HTTP CONNECT
-/// later does not require reshaping stored configuration.
-/// </summary>
+/// <summary>Upstream proxy protocol.</summary>
+/// <remarks>
+/// Stored by name, so the numbers are not part of the file format. The two are not interchangeable on
+/// the wire, and neither can tell it is talking to the other before a timeout: an HTTP proxy that
+/// receives a SOCKS5 greeting waits for the end of a request line that never comes. That is how a
+/// corporate proxy entered here when only SOCKS5 existed looked - "Timed out", ten seconds into every
+/// connection.
+/// </remarks>
 public enum ProxyProtocolType
 {
-    /// <summary>SOCKS5, RFC 1928.</summary>
+    /// <summary>SOCKS5, RFC 1928, with RFC 1929 username/password authentication.</summary>
     Socks5 = 0,
+
+    /// <summary>
+    /// An HTTP proxy, reached with <c>CONNECT host:port</c> (RFC 9110 §9.3.6) for every connection,
+    /// authenticating with Basic, NTLM or Negotiate when it answers 407.
+    /// </summary>
+    Http = 1,
+}
+
+/// <summary>What each protocol can carry.</summary>
+public static class ProxyProtocolTypeExtensions
+{
+    /// <summary>
+    /// Whether the upstream can relay datagrams. SOCKS5 has <c>UDP ASSOCIATE</c>; HTTP CONNECT is a
+    /// byte stream with no datagram service, so a selected application's UDP is refused, never sent
+    /// DIRECT.
+    /// </summary>
+    public static bool CarriesDatagrams(this ProxyProtocolType type) => type == ProxyProtocolType.Socks5;
+
+    /// <summary>Short name for the UI and for logs.</summary>
+    public static string DisplayName(this ProxyProtocolType type) => type switch
+    {
+        ProxyProtocolType.Http => "HTTP",
+        _ => "SOCKS5",
+    };
 }
 
 /// <summary>Where the upstream proxy lives.</summary>
@@ -57,7 +85,10 @@ public sealed record ProxyEndpoint
 /// </remarks>
 public sealed record CredentialReference
 {
-    /// <summary>The SOCKS5 username. Not a secret.</summary>
+    /// <summary>
+    /// The username. Not a secret. For NTLM and Negotiate it may name a domain, as
+    /// <c>DOMAIN\user</c> or <c>user@domain</c>.
+    /// </summary>
     public required string Username { get; init; }
 
     /// <summary>
@@ -91,7 +122,14 @@ public sealed record ProxyConfiguration
     /// <summary>Whether this proxy definition is usable.</summary>
     public bool IsEnabled { get; init; } = true;
 
-    /// <summary>Milliseconds allowed for TCP connect plus the full SOCKS5 handshake.</summary>
+    /// <summary>
+    /// Milliseconds allowed for resolving and connecting to the proxy plus the whole handshake:
+    /// SOCKS5 negotiation, or HTTP CONNECT including every authentication round.
+    /// </summary>
+    /// <remarks>
+    /// One budget, because from the application's point of view it is one wait. A failure still names
+    /// the stage that used it up (<c>UpstreamStage</c>), which is what a bare "Timed out" lacked.
+    /// </remarks>
     public int HandshakeTimeoutMilliseconds { get; init; } = 10_000;
 
     /// <summary>
@@ -122,8 +160,10 @@ public sealed record ProxyConfiguration
     public bool RequiresAuthentication => Credential is not null;
 
     /// <summary>
-    /// True when credentials would cross a real network in the clear. RFC 1929 sends the username
-    /// and password unencrypted, which is irrelevant on loopback and not irrelevant anywhere else.
+    /// True when credentials could cross a real network in the clear. RFC 1929 and HTTP Basic send
+    /// the password unencrypted, which is irrelevant on loopback and not irrelevant anywhere else.
+    /// For an HTTP proxy it is a possibility rather than a certainty: NTLM and Negotiate never send
+    /// the password, and which scheme is used is the proxy's choice, made at connect time.
     /// </summary>
     [JsonIgnore]
     public bool HasPlaintextCredentialExposure => RequiresAuthentication && !Endpoint.IsLoopback;

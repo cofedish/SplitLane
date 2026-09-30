@@ -1,3 +1,5 @@
+using SplitLane.Core.Proxy;
+
 namespace SplitLane.Core.Proxy.Socks5;
 
 /// <summary>
@@ -78,6 +80,12 @@ public sealed class Socks5Exception : Exception
     public Socks5ReplyCode? ReplyCode { get; init; }
 
     /// <summary>
+    /// Where the handshake had got to. Set by the client that drove it; null for a failure raised
+    /// before any I/O, such as an unencodable destination.
+    /// </summary>
+    public UpstreamStage? Stage { get; internal set; }
+
+    /// <summary>
     /// Whether retrying could plausibly succeed.
     /// </summary>
     /// <remarks>
@@ -99,7 +107,11 @@ public sealed class Socks5Exception : Exception
     // ---- Factories -------------------------------------------------------------------------
 
     internal static Socks5Exception UnexpectedVersion(byte value)
-        => new(Socks5ErrorCode.UnexpectedVersion, $"Proxy replied with SOCKS version {value}, expected 5");
+        => new(
+            Socks5ErrorCode.UnexpectedVersion,
+            value == (byte)'H'
+                ? "Proxy answered in HTTP, not SOCKS5 - set the proxy type to HTTP"
+                : $"Proxy replied with SOCKS version {value}, expected 5");
 
     internal static Socks5Exception NoAcceptableMethod()
         => new(Socks5ErrorCode.NoAcceptableAuthenticationMethod, "Proxy rejected all offered authentication methods");

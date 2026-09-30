@@ -11,6 +11,7 @@ public sealed class ProxyViewModel : ObservableObject
     private string _host = "127.0.0.1";
     private string _port = "10808";
     private string _displayName = "Local SOCKS5";
+    private ProxyProtocolType _type = ProxyProtocolType.Socks5;
     private bool _requiresAuthentication;
     private string _username = string.Empty;
     private string _password = string.Empty;
@@ -38,6 +39,62 @@ public sealed class ProxyViewModel : ObservableObject
         get => _displayName;
         set { if (Set(ref _displayName, value)) { _main.MarkDirty(); } }
     }
+
+    /// <summary>Which protocol the upstream speaks.</summary>
+    /// <remarks>
+    /// Not detectable from here: an HTTP proxy sent a SOCKS5 greeting says nothing until the timeout,
+    /// so the person who knows what the proxy is has to say.
+    /// </remarks>
+    public ProxyProtocolType Type
+    {
+        get => _type;
+        set
+        {
+            if (Set(ref _type, value))
+            {
+                _main.MarkDirty();
+                RaiseTypeDependents();
+            }
+        }
+    }
+
+    /// <summary>Radio binding for SOCKS5.</summary>
+    public bool IsSocks5
+    {
+        get => Type == ProxyProtocolType.Socks5;
+        set { if (value) { Type = ProxyProtocolType.Socks5; } }
+    }
+
+    /// <summary>Radio binding for HTTP.</summary>
+    public bool IsHttp
+    {
+        get => Type == ProxyProtocolType.Http;
+        set { if (value) { Type = ProxyProtocolType.Http; } }
+    }
+
+    /// <summary>The badge on the Upstream card.</summary>
+    public string TypeBadge => Type.DisplayName();
+
+    /// <summary>What the Authentication card says about how the credentials are used.</summary>
+    public string AuthenticationSummary => Type == ProxyProtocolType.Http
+        ? "Used when the proxy answers 407: Negotiate (Kerberos), NTLM or Basic, preferred in that order. " +
+          "For a domain account enter DOMAIN\\user or user@domain. The password is encrypted for this machine and " +
+          "stored outside the configuration file — SplitLane can tell you one exists, never what it is."
+        : "Username and password, RFC 1929. The password is encrypted for this machine and stored outside the " +
+          "configuration file — SplitLane can tell you one exists, never what it is.";
+
+    /// <summary>The plaintext warning, which depends on the protocol.</summary>
+    public string PlaintextWarning => Type == ProxyProtocolType.Http
+        ? "This proxy is not on this machine. If it asks for Basic authentication the password crosses the " +
+          "network unencrypted; NTLM and Negotiate never send it."
+        : "This proxy is not on this machine. SOCKS5 sends the username and password unencrypted, so they will " +
+          "cross the network in the clear.";
+
+    /// <summary>What happens to a selected application's UDP with this protocol.</summary>
+    public string UdpNote => Type == ProxyProtocolType.Http
+        ? "HTTP CONNECT carries TCP only. A selected application's UDP is refused, never sent direct: QUIC falls " +
+          "back to TCP, and anything with no TCP fallback will not connect."
+        : "SOCKS5 relays a selected application's UDP as well, while UDP relaying is on in Settings.";
 
     /// <summary>Hostname or IP literal.</summary>
     public string Host
@@ -82,7 +139,7 @@ public sealed class ProxyViewModel : ObservableObject
         }
     }
 
-    /// <summary>SOCKS5 username. Not a secret and stored in the configuration file.</summary>
+    /// <summary>Proxy username. Not a secret and stored in the configuration file.</summary>
     public string Username
     {
         get => _username;
@@ -90,7 +147,7 @@ public sealed class ProxyViewModel : ObservableObject
     }
 
     /// <summary>
-    /// SOCKS5 password.
+    /// Proxy password.
     /// </summary>
     /// <remarks>
     /// Held here only until the next save, then handed to the credential store and never read back.
@@ -184,6 +241,7 @@ public sealed class ProxyViewModel : ObservableObject
 
         _id = proxy.Id;
         _displayName = proxy.DisplayName;
+        _type = proxy.Type;
         _host = proxy.Endpoint.Host;
         _port = proxy.Endpoint.Port.ToString();
         _requiresAuthentication = proxy.RequiresAuthentication;
@@ -194,6 +252,7 @@ public sealed class ProxyViewModel : ObservableObject
         _passwordEdited = false;
 
         Raise(nameof(DisplayName));
+        RaiseTypeDependents();
         Raise(nameof(Host));
         Raise(nameof(Port));
         Raise(nameof(RequiresAuthentication));
@@ -227,7 +286,7 @@ public sealed class ProxyViewModel : ObservableObject
         {
             Id = _id,
             DisplayName = string.IsNullOrWhiteSpace(DisplayName) ? "Proxy" : DisplayName.Trim(),
-            Type = ProxyProtocolType.Socks5,
+            Type = Type,
             Endpoint = new ProxyEndpoint { Host = Host.Trim(), Port = port },
             Credential = RequiresAuthentication
                 ? new CredentialReference { Username = Username.Trim(), SecretKey = "splitlane/proxy" }
@@ -236,6 +295,17 @@ public sealed class ProxyViewModel : ObservableObject
             HandshakeTimeoutMilliseconds = (int)(seconds * 1000),
             PreferHostnames = PreferHostnames,
         };
+    }
+
+    private void RaiseTypeDependents()
+    {
+        Raise(nameof(Type));
+        Raise(nameof(IsSocks5));
+        Raise(nameof(IsHttp));
+        Raise(nameof(TypeBadge));
+        Raise(nameof(AuthenticationSummary));
+        Raise(nameof(PlaintextWarning));
+        Raise(nameof(UdpNote));
     }
 
     /// <summary>Writes the password to the credential store, if one was typed.</summary>

@@ -120,6 +120,40 @@ Windows Firewall discarded every one, because the outbound datagram never left a
 for the conversation. A datagram that cannot be relayed — relaying off, a proxy that refuses
 `UDP ASSOCIATE`, all lanes in use, IPv6 — is dropped, never forwarded.
 
+### The upstream: SOCKS5 or HTTP CONNECT
+
+The listener hands each connection to `UpstreamConnector`, which speaks whichever protocol the proxy
+is configured as. The two cannot tell each other apart before a timeout: an HTTP proxy that receives a
+SOCKS5 greeting reads it as the start of a request line and waits for the rest, silently. That was the
+whole of the "corporate proxy times out" report - the Windows client spoke only SOCKS5, and the only
+symptom was "Timed out" ten seconds into every connection. The protocol is now a choice on the Proxy
+page (and in a managed policy's `proxy.type`), and a SOCKS5 timeout at the greeting says that an HTTP
+proxy looks exactly like this.
+
+HTTP is `CONNECT host:port` per connection (`HttpConnectClient`):
+
+- A **2xx** makes the connection a tunnel from the byte after the blank line. Nothing more is read -
+  no body, no EOF - and bytes that arrived with the answer go to the application first.
+- A **407** is answered with the best scheme on offer: Negotiate, NTLM, Basic. NTLM and Negotiate
+  run through SSPI with the configured account (`DOMAIN\user` or a UPN), never the engine's own
+  LocalSystem identity, and take two rounds on one connection, so the 407's body is read to its end
+  (Content-Length or chunked) and the connection kept; a proxy that closes it mid-handshake is a
+  failure that says so. A refused Negotiate falls back once to NTLM when the proxy offers both
+  (Kerberos needs an SPN, which a proxy entered by address has none of). Digest and anything else
+  fail naming the scheme. A 407 after the final message is rejected credentials and ends the attempt. The scheme that worked is remembered per
+  proxy and user, so later connections send Basic with the first request or start NTLM at once.
+- **502/503/504** are the proxy failing to reach the destination and are reported as that, not as
+  the proxy being unreachable; 403 is the proxy's policy (many allow CONNECT to 443 only).
+
+Every failure is an `UpstreamProxyException` naming its stage - `proxy.resolve`, `proxy.tcp_connect`,
+`proxy.greeting`, `proxy.auth`, `proxy.connect` - with the proxy, destination, elapsed time, HTTP
+status, scheme and socket error, and never the credential. The Activity tooltip and the proxy test
+show the same line. The handshake budget is still one number, because the application waits once;
+what changed is that running out of it now says where.
+
+HTTP CONNECT carries no datagrams, so with an HTTP upstream a selected application's UDP is refused
+(`RuntimeConfiguration.RelaysUdp`), never sent DIRECT.
+
 ## 4. The divert filters
 
 Three handles — socket layer, network layer, DNS observer — plus a sniffing trace handle under

@@ -60,8 +60,8 @@ worse than a visible error.
 **Selected-application UDP goes through the proxy or nowhere.** Datagrams are relayed through a
 SOCKS5 UDP association by default (ADR W-0012), so an application with no TCP fallback, such as
 voice, is not simply cut off. When they cannot be relayed — relaying switched off, a proxy that
-refuses `UDP ASSOCIATE`, all 64 lanes in use, or an IPv6 datagram — they are dropped. They are never
-sent DIRECT.
+refuses `UDP ASSOCIATE`, an HTTP upstream (CONNECT has no datagram service), all 64 lanes in use, or an
+IPv6 datagram — they are dropped. They are never sent DIRECT.
 
 **A rule is an application, not a path.** It records the verified publisher, product and file name,
 or the package family Windows gives the process, so it keeps matching when the application updates
@@ -111,7 +111,7 @@ routing is paused and while no rule selects anything. See [docs/NETWORKING.md](d
 cd windows
 
 dotnet build SplitLane.Windows.slnx      # everything
-dotnet test  SplitLane.Windows.slnx      # 586 tests, no network, no driver, no elevation
+dotnet test  SplitLane.Windows.slnx      # 672 tests, no network, no driver, no elevation
 ```
 
 `SplitLane.Core` targets plain `net10.0`, has no package references and P/Invokes nothing, so the

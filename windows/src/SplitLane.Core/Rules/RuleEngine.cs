@@ -124,7 +124,7 @@ public sealed class RuleSnapshot
         Version = configuration.Version;
         IsRoutingEnabled = configuration.IsRoutingEnabled;
         LogsDirectFlows = configuration.LogsDirectFlows;
-        ProxiesUdp = configuration.ProxiesUdp;
+        ProxiesUdp = configuration.RelaysUdp;
     }
 
     /// <summary>Tables for one tier of rules, with no settings of their own.</summary>
@@ -212,7 +212,10 @@ public sealed class RuleSnapshot
     /// <summary>Whether DIRECT decisions should be logged individually.</summary>
     public bool LogsDirectFlows { get; }
 
-    /// <summary>Whether a selected application's UDP is relayed rather than refused.</summary>
+    /// <summary>
+    /// Whether a selected application's UDP is relayed rather than refused: asked for, and the
+    /// upstream's protocol can carry it (<see cref="RuntimeConfiguration.RelaysUdp"/>).
+    /// </summary>
     public bool ProxiesUdp { get; }
 
     /// <summary>An engine with no rules at all. Every flow goes DIRECT.</summary>

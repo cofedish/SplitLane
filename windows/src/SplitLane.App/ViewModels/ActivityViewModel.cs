@@ -58,7 +58,8 @@ public sealed class ConnectionRowViewModel(ConnectionEvent connection)
     /// <summary>Full detail for the tooltip.</summary>
     public string Tooltip =>
         $"{Connection.ExecutablePath}\nPID {Connection.ProcessId}\n{Connection.Protocol.ToString().ToUpperInvariant()} to " +
-        $"{Connection.DestinationDisplay}\n{Connection.Reason ?? StateLabel}";
+        $"{Connection.DestinationDisplay}\n{Connection.Reason ?? StateLabel}" +
+        (Connection.ErrorDetail is { } detail ? $"\n{detail}" : string.Empty);
 }
 
 /// <summary>The Activity page: what the engine actually did.</summary>
