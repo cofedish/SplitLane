@@ -54,6 +54,7 @@ public sealed class MainViewModel : ObservableObject
     private bool _hasUnsavedChanges;
     private string? _banner;
     private bool _bannerIsError;
+    private string? _updateNotice;
     private bool _suppressDirty;
     private int _loadGeneration;
     private MigrationResult? _lastMigration;
@@ -79,6 +80,7 @@ public sealed class MainViewModel : ObservableObject
         Proxy.LoadFrom(_configuration);
         Settings.LoadFrom(_configuration);
         BeginMigration(_configuration);
+        ReportFinishedUpdate();
 
         GoToCommand = new RelayCommand(parameter =>
         {
@@ -93,6 +95,39 @@ public sealed class MainViewModel : ObservableObject
 
         _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _timer.Tick += async (_, _) => await RefreshAsync().ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// Says, once, how the install asked for in the previous window turned out.
+    /// </summary>
+    /// <remarks>
+    /// The window that asked was closed by the installer, so this one is the first chance to answer
+    /// "did it update?" - which was otherwise a question for the event log.
+    /// </remarks>
+    private void ReportFinishedUpdate()
+    {
+        var preferences = UiSettings.Load();
+        if (preferences.UpdatingFrom is not { } from)
+        {
+            return;
+        }
+
+        UiSettings.Save(preferences with { UpdatingFrom = null });
+
+        var now = Environment.ProcessPath is { } path
+            ? System.Diagnostics.FileVersionInfo.GetVersionInfo(path).ProductVersion
+            : null;
+
+        if (string.Equals(now, from, StringComparison.Ordinal))
+        {
+            SetBanner(
+                $"The update did not install: this is still {UpdateRelauncher.DisplayVersion(now)}. The engine log says why.",
+                isError: true);
+            return;
+        }
+
+        _updateNotice = $"Updated to {UpdateRelauncher.DisplayVersion(now)} (from {UpdateRelauncher.DisplayVersion(from)}).";
+        SetBanner(_updateNotice);
     }
 
     /// <summary>Configuration storage, shared with the engine.</summary>
@@ -379,7 +414,8 @@ public sealed class MainViewModel : ObservableObject
 
             if (RulePresentation.MigrationSummary(result) is { } summary)
             {
-                SetBanner(summary);
+                // After an update the two arrive together; one banner must not hide the other.
+                SetBanner(_updateNotice is null ? summary : $"{_updateNotice} {summary}");
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException

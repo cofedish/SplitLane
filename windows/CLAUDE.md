@@ -129,7 +129,7 @@ and the packet path is a NAT-table lookup keyed on the source port. See `docs/NE
 ```powershell
 cd windows
 dotnet build SplitLane.Windows.slnx
-dotnet test  SplitLane.Windows.slnx          # 672 tests, no network/driver/elevation needed
+dotnet test  SplitLane.Windows.slnx          # 678 tests, no network/driver/elevation needed
 
 SplitLane.Engine.exe --check                 # why the divert layer will not start
 SplitLane.Engine.exe --no-divert             # everything except interception
@@ -161,7 +161,7 @@ without changing the page.
 
 ## State
 
-Core, engine and app are written, build with zero warnings, and 672 tests pass. The app has been run,
+Core, engine and app are written, build with zero warnings, and 678 tests pass. The app has been run,
 driven end to end, and screenshotted. The engine has been run in `--no-divert` mode and its control
 channel, rule engine, redirect listener and SOCKS5 relay verified against a real proxy.
 
@@ -221,11 +221,19 @@ it across the privilege boundary, and routing works through it - a selected appl
 TEST-NET, which routes nowhere, so the only way there was the proxy, while the unselected control
 timed out. Uninstall stops and removes it.
 
-**Self-update is built; delivery is reachable, install unverified.** The engine checks a signed
-manifest once a day and installs when asked; the signing pipeline is verified end to end, and a
-published manifest is accepted by the key the build ships while an edited copy is refused. The
-repository is now public and `releases/latest/download/update.json` answers an anonymous GET (HTTP
-200, checked 2026-09-23); an install through it has not been run. A managed policy can turn it off.
+**Self-update works, verified on a live install (2026-09-30).** The engine checks a signed manifest
+once a day and installs when asked. The development machine went from 0.9.1 to 0.11.0 through it: the
+0.9.1 engine verified the manifest, hashed the MSI, ran it, and came back as 0.11.0 with the rules
+migrated (Windows Installer: "Installation completed successfully"). A managed policy can turn it off.
+
+What that run found: **the window vanished and stayed gone**, which looked like an update doing
+nothing. The MSI runs as SYSTEM, closes the window to replace its files, and Restart Manager cannot
+reopen it in the user's session ("Application SID does not match Conductor SID"). The window now
+starts a watcher before asking for the install (`UpdateRelauncher`: Windows PowerShell from System32,
+as the user, never from the install folder, which the installer would close too). It reopens the
+window only once the executable's version has changed and the service is back, and the new window
+says "Updated to X (from Y)". An update from a build without the watcher - 0.11.0 and older - still
+closes the window without reopening it; the one after that is the first to come back by itself.
 
 **Application identity (2026-09-23).** Rules match by verified identity (W-0013); the managed policy
 (W-0014) is enforced by the engine. Unit- and integration-tested, including real processes started

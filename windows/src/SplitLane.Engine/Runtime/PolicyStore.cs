@@ -326,8 +326,23 @@ public sealed class PolicyStore : IDisposable
             string? ancestry = null;
             if (_verifyAbsence)
             {
-                ancestry = Directory.Exists(folder) ? PolicyFileTrust.FolderProblem(folder) : null;
-                ancestry ??= PolicyFileTrust.AncestryProblem(folder);
+                try
+                {
+                    ancestry = Directory.Exists(folder) ? PolicyFileTrust.FolderProblem(folder) : null;
+                    ancestry ??= PolicyFileTrust.AncestryProblem(folder);
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    // The folder is SYSTEM and Administrators only (EnsureFolder), so an unelevated
+                    // reader - --explain, a test - may not even read its permissions, and cannot
+                    // tell a missing policy from one it is not allowed to see. That is an answer to
+                    // report, not a crash: --explain used to die here on every installed machine.
+                    return new PolicyLoad(
+                        null,
+                        PolicyState.None,
+                        $"{folder} can be inspected only by an administrator; this account cannot tell whether a policy is there",
+                        AbsenceVerified: false);
+                }
             }
 
             return ancestry is null

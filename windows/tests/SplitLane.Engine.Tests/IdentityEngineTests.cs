@@ -283,7 +283,14 @@ public sealed class IdentityEngineTests : IDisposable
         var legacyHash = SHA256.HashData(await File.ReadAllBytesAsync(legacy));
 
         var store = new ConfigurationStore(v2, Path.Combine(_root, "credential.bin"), legacy);
-        await using var runtime = new EngineRuntime(store, new EngineOptions(EnableDivert: false));
+        // A policy location of its own: the machine's is %ProgramData%\SplitLane\Policy, which an
+        // installed SplitLane makes readable by SYSTEM and Administrators only.
+        await using var runtime = new EngineRuntime(
+            store,
+            new EngineOptions(EnableDivert: false),
+            new ImageCatalog(),
+            WindowsImageInspector.Instance,
+            new PolicyStore(Path.Combine(_root, "Policy", "policy.json"), (_, _) => null, verifyAbsence: false));
 
         runtime.LoadConfiguration();
         Assert.Equal(IdentityKind.Path, runtime.Configuration.Rules[0].Identity.Kind);

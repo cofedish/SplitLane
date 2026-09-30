@@ -15,6 +15,8 @@ public sealed class SettingsViewModel : ObservableObject
     private AppTheme _theme = UiSettings.Load().Theme;
     private bool _logsDirectFlows;
     private string _redirectPort = "0";
+    private bool _installRequested;
+    private bool _reopensByItself;
 
     /// <summary>Builds the page.</summary>
     public SettingsViewModel(MainViewModel main)
@@ -58,10 +60,12 @@ public sealed class SettingsViewModel : ObservableObject
 
     /// <summary>Whether the engine is in the middle of fetching or applying one.</summary>
     public bool UpdateInProgress =>
-        _main.Status?.UpdateState is "Downloading" or "Installing";
+        _installRequested || _main.Status?.UpdateState is "Downloading" or "Installing";
 
     /// <summary>One line about where updates stand.</summary>
-    public string UpdateSummary => _main.Status?.UpdateState switch
+    public string UpdateSummary => _installRequested
+        ? InstallingMessage(_main.Status?.UpdateVersion)
+        : _main.Status?.UpdateState switch
     {
         "Available" => $"Version {_main.Status?.UpdateVersion} is available. " +
                        (_main.Status?.UpdateNotes ?? string.Empty),
@@ -246,16 +250,56 @@ public sealed class SettingsViewModel : ObservableObject
 
     private async Task InstallUpdateAsync()
     {
+        var target = _main.Status?.UpdateVersion;
+        var running = Environment.ProcessPath is { } path
+            ? FileVersionInfo.GetVersionInfo(path).ProductVersion
+            : null;
+
+        // The installer closes this window to replace its files and cannot reopen it (it runs as
+        // SYSTEM, the window as the user), so a watcher started now does - see UpdateRelauncher.
+        // Remembering the running version lets the next window say whether the update took.
+        UiSettings.Save(UiSettings.Load() with { UpdatingFrom = running });
+        var watcher = UpdateRelauncher.StartForThisProcess();
+
+        _installRequested = true;
+        _reopensByItself = watcher is not null;
+        RaiseUpdate();
+        _main.SetBanner(InstallingMessage(target));
+
         // The engine restarts itself as part of this, so the reply is an acknowledgement that the
         // installer started rather than that it finished. Saying otherwise would be a promise this
         // side of the pipe cannot keep.
         var reply = await _main.Engine.ApplyUpdateAsync().ConfigureAwait(true);
 
-        _main.SetBanner(reply.Succeeded
-            ? "Installing. SplitLane will reconnect to the engine when it comes back."
-            : $"The update could not be installed: {reply.Message}");
+        // Only an explicit refusal ends it. A reply lost because the installer stopped the engine
+        // before it arrived is the install working, and the watcher gives up by itself if this
+        // window is never closed or the version never changes.
+        if (reply.Connected && reply.Response?.Kind == EngineResponseKind.Failure)
+        {
+            // Nothing will close this window, so nothing should reopen it.
+            try
+            {
+                watcher?.Kill();
+            }
+            catch (InvalidOperationException)
+            {
+            }
 
+            UiSettings.Save(UiSettings.Load() with { UpdatingFrom = null });
+            _installRequested = false;
+            _main.SetBanner($"The update could not be installed: {reply.Message}", isError: true);
+        }
+
+        watcher?.Dispose();
         RaiseUpdate();
+    }
+
+    private string InstallingMessage(string? target)
+    {
+        var version = target is { Length: > 0 } ? $" {target}" : string.Empty;
+        return _reopensByItself
+            ? $"Installing{version}. SplitLane closes while its files are replaced and reopens by itself in a few seconds."
+            : $"Installing{version}. SplitLane closes while its files are replaced; open it again when it is done.";
     }
 
     private void RaiseUpdate()

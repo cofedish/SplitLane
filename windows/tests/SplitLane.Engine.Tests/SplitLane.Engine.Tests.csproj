@@ -26,4 +26,12 @@
     <Using Include="Xunit" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!--
+      The app's update relauncher, linked rather than referenced: it has no WPF dependency, and
+      referencing the WPF executable to test one class would drag the whole window in.
+    -->
+    <Compile Include="..\..\src\SplitLane.App\Services\UpdateRelauncher.cs" Link="Linked\UpdateRelauncher.cs" />
+  </ItemGroup>
+
 </Project>

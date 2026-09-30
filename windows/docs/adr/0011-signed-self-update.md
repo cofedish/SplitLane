@@ -69,7 +69,13 @@ The signing pipeline is verified end to end: a published manifest is accepted by
 ships and an edited copy is refused. The repository is public, and
 `https://github.com/cofedish/SplitLane/releases/latest/download/update.json` answers an anonymous
 request with HTTP 200 (checked 2026-09-23), so an installation can reach it. An install through the
-updater has not been run.
+updater has been run on a live machine: 0.9.1 to 0.11.0 on 2026-09-30, verified, hashed, installed and
+the service restarted as 0.11.0.
+
+That run showed one gap, in the window rather than the engine: the MSI runs as SYSTEM and closes the
+window to replace its files, and Restart Manager cannot start it again in the user's session. The
+window now starts an unelevated watcher before asking for the install, which reopens it once the new
+version is in place (`UpdateRelauncher`).
 
 ## Alternatives considered
 

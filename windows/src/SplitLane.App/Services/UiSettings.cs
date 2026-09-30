@@ -7,8 +7,14 @@ namespace SplitLane.App.Services;
 
 /// <summary>Preferences that belong to the window rather than to the routing engine.</summary>
 /// <param name="Theme">Which look the application wears.</param>
+/// <param name="UpdatingFrom">
+/// The version that was running when an install was asked for, so the window that opens afterwards
+/// can say what changed - or, when it is still the same version, that the install did not happen.
+/// Cleared once it has been read.
+/// </param>
 public sealed record UiPreferences(
-    [property: JsonConverter(typeof(JsonStringEnumConverter))] AppTheme Theme = AppTheme.System);
+    [property: JsonConverter(typeof(JsonStringEnumConverter))] AppTheme Theme = AppTheme.System,
+    string? UpdatingFrom = null);
 
 /// <summary>
 /// Where the window's own preferences live.

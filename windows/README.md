@@ -111,7 +111,7 @@ routing is paused and while no rule selects anything. See [docs/NETWORKING.md](d
 cd windows
 
 dotnet build SplitLane.Windows.slnx      # everything
-dotnet test  SplitLane.Windows.slnx      # 672 tests, no network, no driver, no elevation
+dotnet test  SplitLane.Windows.slnx      # 678 tests, no network, no driver, no elevation
 ```
 
 `SplitLane.Core` targets plain `net10.0`, has no package references and P/Invokes nothing, so the

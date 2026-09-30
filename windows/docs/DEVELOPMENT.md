@@ -9,7 +9,7 @@ dotnet build SplitLane.Windows.slnx
 dotnet test  SplitLane.Windows.slnx
 ```
 
-672 tests: 499 in `SplitLane.Core.Tests`, 173 in `SplitLane.Engine.Tests`. None of them needs a
+678 tests: 499 in `SplitLane.Core.Tests`, 179 in `SplitLane.Engine.Tests`. None of them needs a
 network, a driver, elevation, or a daemon to be started first — the SOCKS5 and HTTP proxy integration
 tests run against in-process servers in `tools/socks5-testbed` (`--http` runs the HTTP one by hand), so they run on every `dotnet test` rather than
 being skipped like the macOS project's Docker-based equivalents.

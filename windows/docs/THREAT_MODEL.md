@@ -320,7 +320,10 @@ The engine checks a signed manifest once a day, and installs the release it desc
 
 Verified: the signing pipeline end to end, a published manifest accepted by the key the build ships,
 and an edited copy refused. `releases/latest/download/update.json` answers an anonymous request (HTTP
-200, checked 2026-09-23). An install through the updater has not been run. Nothing SplitLane ships is
+200, checked 2026-09-23). An install through the updater has been run on a live machine, 0.9.1 to
+0.11.0 (2026-09-30). The window's relauncher runs unelevated, as the user, and takes nothing from the
+engine: it reopens the executable the window was started from, and only after that file's version
+has changed. Nothing SplitLane ships is
 code-signed, so the manifest signature protects the delivery channel, not the binaries' reputation.
 
 ## What a live run established
