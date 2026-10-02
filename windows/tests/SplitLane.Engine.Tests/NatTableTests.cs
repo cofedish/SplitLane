@@ -1,5 +1,6 @@
 using System.Net;
 using Microsoft.Extensions.Time.Testing;
+using SplitLane.Core.Models;
 using SplitLane.Engine.Flows;
 
 namespace SplitLane.Engine.Tests;
@@ -7,6 +8,25 @@ namespace SplitLane.Engine.Tests;
 /// <summary>The table that remembers where a redirected connection was really going.</summary>
 public sealed class NatTableTests
 {
+    [Fact]
+    public void StrictPolicyDoesNotExpireIntoDirectWhileSocketIsOpen()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        var table = new NatTable(time);
+        table.Record(51000, Entry(time.GetUtcNow()) with { Action = RouteAction.ProxyOnly });
+        table.RecordVerdict(51001, IPAddress.Parse("203.0.113.10"), 443, NatVerdict.Block);
+        time.Advance(TimeSpan.FromHours(1));
+
+        Assert.Equal(0, table.Sweep());
+        Assert.True(table.TryGet(51000, out _));
+        Assert.True(table.TryGetVerdict(51001, out _, out _, out var verdict));
+        Assert.Equal(NatVerdict.Block, verdict);
+        table.Remove(51000);
+        table.Remove(51001);
+        Assert.False(table.TryGet(51000, out _));
+        Assert.False(table.TryGetVerdict(51001, out _, out _, out _));
+    }
+
     private static NatEntry Entry(DateTimeOffset now, string destination = "93.184.216.34") => new(
         IPAddress.Parse("192.168.1.5"),
         IPAddress.Parse(destination),

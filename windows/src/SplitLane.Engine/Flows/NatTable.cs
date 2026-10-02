@@ -42,6 +42,12 @@ public sealed record NatEntry(
     /// </para>
     /// </remarks>
     public bool SynRedirected { get; set; }
+
+    /// <summary>The policy action captured for this connection.</summary>
+    public RouteAction Action { get; init; } = RouteAction.Proxy;
+
+    /// <summary>Matched application or destination rule, for diagnostics.</summary>
+    public string? RuleKey { get; init; }
 }
 
 /// <summary>What was decided about a connection that is not redirected.</summary>
@@ -90,6 +96,7 @@ public sealed class NatTable(TimeProvider? timeProvider = null)
 {
     private readonly ConcurrentDictionary<ushort, NatEntry> _entries = new();
     private readonly ConcurrentDictionary<ushort, DirectDecision> _direct = new();
+    private readonly ConcurrentDictionary<ushort, DirectDecision> _closedStrict = new();
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
 
     /// <summary>
@@ -109,10 +116,11 @@ public sealed class NatTable(TimeProvider? timeProvider = null)
     public void Record(ushort localPort, NatEntry entry)
     {
         ArgumentNullException.ThrowIfNull(entry);
+        _closedStrict.TryRemove(localPort, out _);
         _entries[localPort] = entry;
     }
 
-    /// <summary>Looks up a live entry, treating an expired one as absent.</summary>
+    /// <summary>Looks up a live entry; strict policy remains until socket CLOSE or routing shutdown.</summary>
     public bool TryGet(ushort localPort, out NatEntry entry)
     {
         if (!_entries.TryGetValue(localPort, out var found))
@@ -121,7 +129,7 @@ public sealed class NatTable(TimeProvider? timeProvider = null)
             return false;
         }
 
-        if (_time.GetUtcNow() - found.CreatedAt > EntryLifetime)
+        if (found.Action != RouteAction.ProxyOnly && _time.GetUtcNow() - found.CreatedAt > EntryLifetime)
         {
             _entries.TryRemove(localPort, out _);
             entry = null!;
@@ -162,6 +170,7 @@ public sealed class NatTable(TimeProvider? timeProvider = null)
     public void RecordVerdict(ushort localPort, IPAddress destination, ushort destinationPort, NatVerdict verdict)
     {
         ArgumentNullException.ThrowIfNull(destination);
+        _closedStrict.TryRemove(localPort, out _);
         _direct[localPort] = new DirectDecision(destination, destinationPort, _time.GetUtcNow(), verdict);
     }
 
@@ -207,7 +216,7 @@ public sealed class NatTable(TimeProvider? timeProvider = null)
             return false;
         }
 
-        if (_time.GetUtcNow() - found.CreatedAt > EntryLifetime)
+        if (found.Verdict == NatVerdict.Direct && _time.GetUtcNow() - found.CreatedAt > EntryLifetime)
         {
             _direct.TryRemove(localPort, out _);
             return false;
@@ -229,7 +238,35 @@ public sealed class NatTable(TimeProvider? timeProvider = null)
         return _entries.TryRemove(localPort, out _) || removedDirect;
     }
 
-    /// <summary>Drops expired rows. Called periodically rather than on every lookup.</summary>
+    /// <summary>
+    /// Socket CLOSE precedes some final kernel packets. Keep a bounded refusal tombstone so
+    /// FIN/ACK/RST cannot escape DIRECT after forgetting a strict connection. A new CONNECT
+    /// replaces it; ordinary Remove remains available for explicit cleanup.
+    /// </summary>
+    public void Close(ushort localPort)
+    {
+        if (_entries.TryGetValue(localPort, out var entry) && entry.Action == RouteAction.ProxyOnly)
+        {
+            _closedStrict[localPort] = new DirectDecision(entry.OriginalDestination,
+                entry.OriginalDestinationPort, _time.GetUtcNow(), NatVerdict.Block);
+        }
+        else if (_direct.TryGetValue(localPort, out var decision) && decision.Verdict != NatVerdict.Direct)
+        {
+            _closedStrict[localPort] = decision with { CreatedAt = _time.GetUtcNow() };
+        }
+        Remove(localPort);
+    }
+
+    /// <summary>A final packet of a closed strict connection must still be refused.</summary>
+    public bool IsClosedStrict(ushort localPort, IPAddress destination, ushort destinationPort) =>
+        _closedStrict.TryGetValue(localPort, out var found) &&
+        _time.GetUtcNow() - found.CreatedAt <= EntryLifetime &&
+        found.Port == destinationPort && found.Destination.Equals(destination);
+
+    /// <summary>
+    /// Drops expired non-strict rows. ProxyOnly and refusal rows remain until socket CLOSE or
+    /// routing shutdown so expiry cannot turn a protected flow into DIRECT. Port keys bound size.
+    /// </summary>
     public int Sweep()
     {
         var cutoff = _time.GetUtcNow() - EntryLifetime;
@@ -237,7 +274,7 @@ public sealed class NatTable(TimeProvider? timeProvider = null)
 
         foreach (var (port, entry) in _entries)
         {
-            if (entry.CreatedAt < cutoff && _entries.TryRemove(port, out _))
+            if (entry.Action != RouteAction.ProxyOnly && entry.CreatedAt < cutoff && _entries.TryRemove(port, out _))
             {
                 removed++;
             }
@@ -245,9 +282,17 @@ public sealed class NatTable(TimeProvider? timeProvider = null)
 
         foreach (var (port, decision) in _direct)
         {
-            if (decision.CreatedAt < cutoff && _direct.TryRemove(port, out _))
+            if (decision.Verdict == NatVerdict.Direct && decision.CreatedAt < cutoff && _direct.TryRemove(port, out _))
             {
                 removed++;
+            }
+        }
+
+        foreach (var (port, decision) in _closedStrict)
+        {
+            if (decision.CreatedAt < cutoff)
+            {
+                _closedStrict.TryRemove(new KeyValuePair<ushort, DirectDecision>(port, decision));
             }
         }
 
@@ -259,6 +304,7 @@ public sealed class NatTable(TimeProvider? timeProvider = null)
     {
         _entries.Clear();
         _direct.Clear();
+        _closedStrict.Clear();
     }
 
     private readonly record struct DirectDecision(

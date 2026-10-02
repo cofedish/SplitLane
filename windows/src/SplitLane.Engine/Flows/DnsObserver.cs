@@ -2,11 +2,12 @@ using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Net;
 using System.Text;
+using SplitLane.Core.Rules;
 
 namespace SplitLane.Engine.Flows;
 
 /// <summary>
-/// Remembers which hostname an address was most recently resolved from.
+/// Correlates addresses with bounded, TTL-limited DNS evidence.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -16,10 +17,8 @@ namespace SplitLane.Engine.Flows;
 /// </para>
 /// <para>
 /// So the name is recovered rather than intercepted: DNS <i>responses</i> are sniffed, and the
-/// answers are remembered. This is strictly an optimisation for the SOCKS5 request — it lets the
-/// upstream resolve the name from its own vantage point instead of being handed a CDN edge address
-/// the local resolver picked. It is never used for a routing decision, because a name is what the
-/// application asked for and an address is where the packet goes.
+/// answers are remembered. The existing proxy path and domain policies share this evidence. Multiple
+/// live names on one IP are ambiguous; the observer does not guess the application's intended name.
 /// </para>
 /// <para>
 /// It does <b>not</b> make DNS private. The query still left this machine in the clear. That
@@ -28,10 +27,11 @@ namespace SplitLane.Engine.Flows;
 /// </remarks>
 public sealed class DnsObserver(TimeProvider? timeProvider = null)
 {
-    private readonly ConcurrentDictionary<string, Entry> _names = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<IPAddress, Entry[]> _names = new();
+    private readonly Lock _writeGate = new();
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
 
-    private readonly record struct Entry(string Hostname, DateTimeOffset SeenAt);
+    private readonly record struct Entry(string Hostname, DateTimeOffset ExpiresAt);
 
     /// <summary>How long a remembered name is trusted.</summary>
     /// <remarks>
@@ -52,38 +52,101 @@ public sealed class DnsObserver(TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(address);
 
-        if (string.IsNullOrWhiteSpace(hostname))
+        if (!DomainPattern.TryNormalize(hostname, out var normalized))
         {
             return;
         }
 
-        if (_names.Count >= MaxEntries)
+        lock (_writeGate)
         {
-            _names.Clear();
+            Add(address, normalized, _time.GetUtcNow() + EntryLifetime);
         }
-
-        _names[address.ToString()] = new Entry(hostname, _time.GetUtcNow());
     }
 
     /// <summary>Returns the remembered name for an address, or null.</summary>
     public string? Lookup(IPAddress? address)
     {
-        if (address is null || !_names.TryGetValue(address.ToString(), out var entry))
+        if (address is null || !_names.TryGetValue(address, out var entries))
         {
             return null;
         }
 
-        if (_time.GetUtcNow() - entry.SeenAt > EntryLifetime)
+        var now = _time.GetUtcNow();
+        string? result = null;
+        foreach (var entry in entries)
         {
-            _names.TryRemove(address.ToString(), out _);
-            return null;
-        }
+            if (entry.ExpiresAt <= now)
+            {
+                continue;
+            }
 
-        return entry.Hostname;
+            if (result is not null && !string.Equals(result, entry.Hostname, StringComparison.Ordinal))
+            {
+                return null;
+            }
+
+            result = entry.Hostname;
+        }
+        return result;
     }
 
     /// <summary>Forgets everything.</summary>
-    public void Clear() => _names.Clear();
+    public void Clear()
+    {
+        lock (_writeGate)
+        {
+            _names.Clear();
+        }
+    }
+
+    /// <summary>Removes expired associations periodically; readers see immutable arrays.</summary>
+    public void Sweep()
+    {
+        lock (_writeGate)
+        {
+            var now = _time.GetUtcNow();
+            foreach (var (address, entries) in _names)
+            {
+                var live = entries.Where(e => e.ExpiresAt > now).ToArray();
+                if (live.Length == 0)
+                {
+                    _names.TryRemove(address, out _);
+                }
+                else if (live.Length != entries.Length)
+                {
+                    _names[address] = live;
+                }
+            }
+        }
+    }
+
+    private void Add(IPAddress address, string hostname, DateTimeOffset expiresAt)
+    {
+        if (MaxEntries <= 0 || expiresAt <= _time.GetUtcNow())
+        {
+            return;
+        }
+
+        if (!_names.ContainsKey(address) && _names.Count >= MaxEntries)
+        {
+            Sweep();
+            if (_names.Count >= MaxEntries)
+            {
+                var oldest = _names.MinBy(pair => pair.Value.Max(e => e.ExpiresAt));
+                _names.TryRemove(oldest.Key, out _);
+            }
+        }
+
+        var previous = _names.TryGetValue(address, out var entries) ? entries : [];
+        var live = previous.Where(e => e.ExpiresAt > _time.GetUtcNow() && e.Hostname != hostname).ToArray();
+        // Bound aliases per IP too. Saturated evidence stays ambiguous until the latest TTL expires.
+        if (live.Length >= 16)
+        {
+            _names[address] = [new Entry("", live.Max(e => e.ExpiresAt)), new Entry("?", expiresAt)];
+            return;
+        }
+        _names[address] = [.. live, new Entry(hostname, expiresAt)];
+    }
 
     /// <summary>
     /// Parses a DNS response and records every A and AAAA answer.
@@ -110,72 +173,122 @@ public sealed class DnsObserver(TimeProvider? timeProvider = null)
         var flags = BinaryPrimitives.ReadUInt16BigEndian(datagram[2..4]);
         var isResponse = (flags & 0x8000) != 0;
         var responseCode = flags & 0x000F;
-        if (!isResponse || responseCode != 0)
+        if (!isResponse || responseCode != 0 || (flags & 0x0200) != 0)
         {
             return 0;
         }
 
         var questionCount = BinaryPrimitives.ReadUInt16BigEndian(datagram[4..6]);
         var answerCount = BinaryPrimitives.ReadUInt16BigEndian(datagram[6..8]);
-        if (questionCount == 0 || answerCount == 0)
+        if (questionCount != 1 || answerCount == 0 || answerCount > 256)
         {
             return 0;
         }
 
         var offset = 12;
 
-        if (!TryReadName(datagram, ref offset, out var questionName))
+        if (!TryReadName(datagram, ref offset, out var questionName) || offset + 4 > datagram.Length ||
+            !DomainPattern.TryNormalize(questionName, out questionName))
         {
             return 0;
         }
 
-        // QTYPE + QCLASS, plus any further questions, which are vanishingly rare and skipped whole.
-        offset += 4;
-        for (var i = 1; i < questionCount; i++)
+        if (BinaryPrimitives.ReadUInt16BigEndian(datagram.Slice(offset + 2, 2)) != 1)
         {
-            if (!TryReadName(datagram, ref offset, out _))
+            return 0;
+        }
+        offset += 4;
+        var addresses = new List<(string Owner, IPAddress Address, uint Ttl)>();
+        var aliases = new Dictionary<string, (string Target, uint Ttl)>(StringComparer.Ordinal);
+
+        for (var i = 0; i < answerCount; i++)
+        {
+            if (!TryReadName(datagram, ref offset, out var owner) || offset + 10 > datagram.Length ||
+                !DomainPattern.TryNormalize(owner, out owner))
             {
                 return 0;
             }
 
-            offset += 4;
-        }
-
-        var recorded = 0;
-
-        for (var i = 0; i < answerCount; i++)
-        {
-            if (!TryReadName(datagram, ref offset, out _) || offset + 10 > datagram.Length)
-            {
-                break;
-            }
-
             var type = BinaryPrimitives.ReadUInt16BigEndian(datagram.Slice(offset, 2));
+            var recordClass = BinaryPrimitives.ReadUInt16BigEndian(datagram.Slice(offset + 2, 2));
+            var ttl = BinaryPrimitives.ReadUInt32BigEndian(datagram.Slice(offset + 4, 4));
             var dataLength = BinaryPrimitives.ReadUInt16BigEndian(datagram.Slice(offset + 8, 2));
             offset += 10;
 
             if (offset + dataLength > datagram.Length)
             {
-                break;
+                return 0;
             }
 
-            switch (type)
+            switch (recordClass == 1 ? type : 0)
             {
                 case 1 when dataLength == 4:
-                    Record(new IPAddress(datagram.Slice(offset, 4)), questionName);
-                    recorded++;
+                    addresses.Add((owner, new IPAddress(datagram.Slice(offset, 4)), ttl));
                     break;
 
                 case 28 when dataLength == 16:
-                    Record(new IPAddress(datagram.Slice(offset, 16)), questionName);
-                    recorded++;
+                    addresses.Add((owner, new IPAddress(datagram.Slice(offset, 16)), ttl));
+                    break;
+
+                case 5:
+                    var cnameOffset = offset;
+                    if (!TryReadName(datagram, ref cnameOffset, out var target) || cnameOffset != offset + dataLength ||
+                        !DomainPattern.TryNormalize(target, out target))
+                    {
+                        return 0;
+                    }
+                    aliases[owner] = (target, ttl);
                     break;
             }
 
             offset += dataLength;
         }
 
-        return recorded;
+        var reachable = new Dictionary<string, uint>(StringComparer.Ordinal) { [questionName] = uint.MaxValue };
+        var current = questionName;
+        var chainTtl = uint.MaxValue;
+        for (var i = 0; i < 16 && aliases.TryGetValue(current, out var alias); i++)
+        {
+            if (reachable.ContainsKey(alias.Target))
+            {
+                return 0;
+            }
+            chainTtl = Math.Min(chainTtl, alias.Ttl);
+            reachable[alias.Target] = chainTtl;
+            current = alias.Target;
+        }
+
+        var learned = addresses.Where(a => reachable.ContainsKey(a.Owner)).ToArray();
+        lock (_writeGate)
+        {
+            // Replace only the families answered, preserving an AAAA answer when A is refreshed.
+            var families = learned.Select(a => a.Address.AddressFamily).ToHashSet();
+            foreach (var (address, entries) in _names)
+            {
+                if (!families.Contains(address.AddressFamily))
+                {
+                    continue;
+                }
+                var kept = entries.Where(e => e.Hostname != questionName).ToArray();
+                if (kept.Length == 0)
+                {
+                    _names.TryRemove(address, out _);
+                }
+                else
+                {
+                    _names[address] = kept;
+                }
+            }
+
+            var now = _time.GetUtcNow();
+            foreach (var answer in learned)
+            {
+                var seconds = Math.Min(answer.Ttl, reachable[answer.Owner]);
+                var lifetime = TimeSpan.FromSeconds(Math.Min(seconds, EntryLifetime.TotalSeconds));
+                Add(answer.Address, questionName, now + lifetime);
+            }
+        }
+        return learned.Length;
     }
 
     /// <summary>Reads a possibly compressed DNS name, advancing past it in the wire stream.</summary>

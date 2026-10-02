@@ -231,7 +231,7 @@ public sealed class RedirectListener : IAsyncDisposable
                 DestinationHost = entry.Hostname ?? entry.OriginalDestination.ToString(),
                 DestinationPort = entry.OriginalDestinationPort,
                 Protocol = FlowProtocol.Tcp,
-                Route = RouteAction.Proxy,
+                Route = entry.Action,
                 State = ConnectionState.Connecting,
             };
 

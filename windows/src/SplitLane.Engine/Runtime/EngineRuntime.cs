@@ -437,6 +437,8 @@ public sealed class EngineRuntime : IAsyncDisposable
                 var migrated = (current with
                 {
                     Rules = result.Configuration.Rules,
+                    DomainRules = ConfigurationMigrator.RebindDomainRules(current.DomainRules, basis.Rules,
+                        result.Configuration.Rules),
                     Version = result.Configuration.Version,
                 }).WithNextGeneration();
                 _store.Save(migrated);
@@ -717,6 +719,7 @@ public sealed class EngineRuntime : IAsyncDisposable
 
     private void Sweep()
     {
+        _dns.Sweep();
         var removed = _nat.Sweep();
         if (removed > 0)
         {

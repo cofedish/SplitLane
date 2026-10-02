@@ -290,7 +290,7 @@ public sealed class DivertHandle : IDisposable
     /// </summary>
     /// <remarks>
     /// Closing the handle from another thread while a receive is in flight is not defined; shutting
-    /// it down first is. <c>how = 2</c> is <c>WINDIVERT_SHUTDOWN_BOTH</c>.
+    /// it down first is. <c>how = 3</c> is <c>WINDIVERT_SHUTDOWN_BOTH</c> (RECV | SEND).
     /// </remarks>
     public bool Shutdown()
     {
@@ -299,7 +299,7 @@ public sealed class DivertHandle : IDisposable
             return true;
         }
 
-        if (WinDivertNative.Shutdown(_handle, 2))
+        if (WinDivertNative.Shutdown(_handle, 3))
         {
             return true;
         }

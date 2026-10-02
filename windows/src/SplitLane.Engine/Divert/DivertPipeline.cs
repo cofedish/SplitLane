@@ -111,6 +111,7 @@ public sealed class DivertPipeline : IAsyncDisposable
     /// layer and would escape DIRECT — the exact leak ADR 0004 exists to prevent.
     /// </remarks>
     private readonly ConcurrentDictionary<ushort, UdpSocketDecision> _udpPortOwners = new();
+    private readonly ConcurrentDictionary<ushort, FlowDescriptor> _udpFlows = new();
     private readonly ConcurrentDictionary<ushort, IPAddress> _udpOrigins = new();
     private readonly ConcurrentDictionary<ushort, PendingConnection> _pendingTcp = new();
     private readonly ConcurrentDictionary<ushort, PendingBind> _pendingUdp = new();
@@ -119,10 +120,8 @@ public sealed class DivertPipeline : IAsyncDisposable
 
     private DivertHandle? _socketHandle;
     private DivertHandle? _networkHandle;
-    private DivertHandle? _dnsHandle;
     private Thread? _socketThread;
     private Thread? _networkThread;
-    private Thread? _dnsThread;
     private volatile bool _running;
     private ushort _listenerPort;
     private long _socketEvents;
@@ -263,7 +262,8 @@ public sealed class DivertPipeline : IAsyncDisposable
         var filter =
             $"(outbound and tcp and not loopback) or " +
             $"(outbound and tcp and loopback and tcp.SrcPort = {listenerPort}) or " +
-            $"(outbound and udp and not loopback)";
+            $"(outbound and udp and not loopback) or " +
+            "(udp and udp.SrcPort = 53) or (tcp and tcp.SrcPort = 53)";
 
         // Loopback UDP, for the lanes' replies on their way back to the application - and only from
         // the block reserved for them.
@@ -282,9 +282,6 @@ public sealed class DivertPipeline : IAsyncDisposable
 
         return filter;
     }
-
-    /// <summary>Filter for the DNS observer: inbound answers only, sniffed.</summary>
-    internal const string DnsFilter = "inbound and udp and udp.SrcPort = 53";
 
     /// <summary>
     /// Opens the handles and starts the threads.
@@ -354,18 +351,8 @@ public sealed class DivertPipeline : IAsyncDisposable
             }
         }
 
-        // The DNS observer is opened last and is optional: losing hostname recovery degrades SOCKS5
-        // requests to IP literals, which still work. It must never prevent routing from starting.
-        try
-        {
-            _dnsHandle = DivertHandle.Open(
-                DnsFilter, WinDivertLayer.Network, priority: 1,
-                WinDivertFlags.Sniff | WinDivertFlags.RecvOnly);
-        }
-        catch (DivertException ex)
-        {
-            SplitLaneLog.Warning(LogCategory, $"DNS observer unavailable, falling back to IP literals: {ex.Message}");
-        }
+        // DNS responses transit the same packet queue. Learn before reinjecting the answer, so the
+        // application cannot consume it and connect before a separate sniff thread has observed it.
 
         _running = true;
 
@@ -376,11 +363,6 @@ public sealed class DivertPipeline : IAsyncDisposable
 
         _socketThread = StartThread("SplitLane.SocketPump", () => SocketLoop(_socketHandle));
         _networkThread = StartThread("SplitLane.PacketLoop", () => NetworkLoop(_networkHandle));
-
-        if (_dnsHandle is not null)
-        {
-            _dnsThread = StartThread("SplitLane.DnsObserver", () => DnsLoop(_dnsHandle));
-        }
 
         if (_traceHandle is not null)
         {
@@ -482,9 +464,15 @@ public sealed class DivertPipeline : IAsyncDisposable
         switch (address.Event)
         {
             case WinDivertEvent.SocketClose:
-                _nat.Remove(socket.LocalPort);
-                _pendingTcp.TryRemove(socket.LocalPort, out _);
+                if (socket.Protocol == PacketView.ProtocolTcp)
+                {
+                    _nat.Close(socket.LocalPort);
+                    _pendingTcp.TryRemove(socket.LocalPort, out _);
+                    return;
+                }
+
                 _pendingUdp.TryRemove(socket.LocalPort, out _);
+                _udpFlows.TryRemove(socket.LocalPort, out _);
 
                 if (_udpPortOwners.TryRemove(socket.LocalPort, out _))
                 {
@@ -512,11 +500,13 @@ public sealed class DivertPipeline : IAsyncDisposable
     {
         if (socket.ProcessId == _selfProcessId)
         {
+            _udpFlows[socket.LocalPort] = new FlowDescriptor(socket.ProcessId, string.Empty, null, 0,
+                FlowProtocol.Udp, IsEngineTraffic: true);
             return;
         }
 
         var info = _processes.ResolveInfo(socket.ProcessId);
-        if (info.IsUnknown)
+        if (info.IsUnknown && _engine().Snapshot.DomainsCount == 0)
         {
             return;
         }
@@ -529,6 +519,7 @@ public sealed class DivertPipeline : IAsyncDisposable
         var flow = new FlowDescriptor(
             socket.ProcessId, info.ExecutablePath, "203.0.113.1", 0, FlowProtocol.Udp,
             Image: EvidenceFor(info, engine));
+        _udpFlows[socket.LocalPort] = flow;
 
         var decision = engine.Decide(flow);
 
@@ -547,7 +538,7 @@ public sealed class DivertPipeline : IAsyncDisposable
         // datagrams are dropped where they are found, and a proxied socket's are carried. What is
         // still not remembered is every other socket on the machine, which would be both larger and
         // a description of what the user is doing.
-        if (decision.Action is RouteAction.Block or RouteAction.Proxy)
+        if (decision.Action is RouteAction.Block or RouteAction.Proxy or RouteAction.ProxyOnly)
         {
             _udpPortOwners[socket.LocalPort] = new UdpSocketDecision(socket.ProcessId, decision.Action);
         }
@@ -614,7 +605,7 @@ public sealed class DivertPipeline : IAsyncDisposable
     }
 
     /// <summary>Records what the packet loop must do with a connection's packets.</summary>
-    private void RecordTcpDecision(
+    internal void RecordTcpDecision(
         ushort localPort,
         IPAddress local,
         IPAddress remote,
@@ -626,14 +617,17 @@ public sealed class DivertPipeline : IAsyncDisposable
         switch (decision.Action)
         {
             case RouteAction.Proxy:
+            case RouteAction.ProxyOnly:
                 _nat.Record(localPort, NatTable.EntryFor(
                     local, remote, flow.RemotePort, flow.ProcessId, flow.ExecutablePath, rule, flow.RemoteHostname,
-                    DateTimeOffset.UtcNow));
+                    DateTimeOffset.UtcNow) with
+                { Action = decision.Action, RuleKey = decision.RuleKey });
                 _statistics.CountProxied();
                 SplitLaneLog.Debug(
                     LogCategory,
-                    $"PROXY {ExecutablePath.FileName(flow.ExecutablePath)} :{localPort} -> " +
-                    $"{flow.DestinationDisplay} ({decision.Explain()})");
+                    $"{decision.Action} pid={flow.ProcessId} {ExecutablePath.FileName(flow.ExecutablePath)} :{localPort} -> " +
+                    $"{flow.DestinationDisplay} ip={remote} protocol=TCP rule={decision.RuleKey} " +
+                    $"fallback=prohibited ({decision.Explain()})");
                 break;
 
             case RouteAction.Block:
@@ -723,6 +717,7 @@ public sealed class DivertPipeline : IAsyncDisposable
             {
                 Image = images.EvidenceFor(record, pending.PackageFamily, engine.Snapshot.NeedsProductName),
             };
+            _udpFlows[port] = flow;
 
             var decision = engine.Decide(flow);
             if (decision.Reason == RouteReasonKind.IdentityPending)
@@ -736,7 +731,7 @@ public sealed class DivertPipeline : IAsyncDisposable
                 continue;
             }
 
-            if (decision.Action is RouteAction.Block or RouteAction.Proxy)
+            if (decision.Action is RouteAction.Block or RouteAction.Proxy or RouteAction.ProxyOnly)
             {
                 _udpPortOwners[port] = new UdpSocketDecision(flow.ProcessId, decision.Action);
             }
@@ -898,7 +893,7 @@ public sealed class DivertPipeline : IAsyncDisposable
         Interlocked.Increment(ref _decisionTimeouts);
     }
 
-    private enum PacketAction
+    internal enum PacketAction
     {
         /// <summary>Reinject unchanged.</summary>
         Forward,
@@ -911,16 +906,31 @@ public sealed class DivertPipeline : IAsyncDisposable
     }
 
     /// <summary>Decides what to do with one captured packet, rewriting it in place when needed.</summary>
-    private PacketAction Classify(Span<byte> packet, ref WinDivertAddress address)
+    internal PacketAction Classify(Span<byte> packet, ref WinDivertAddress address)
     {
         if (!PacketView.TryParse(packet, out var view) || !view.HasPorts)
         {
             return PacketAction.Forward;
         }
 
+        if (view.SourcePort == 53)
+        {
+            ObserveDns(view);
+            if (!address.Outbound || address.Loopback)
+            {
+                return PacketAction.Forward;
+            }
+        }
+
         if (view.Protocol == PacketView.ProtocolUdp)
         {
             return ClassifyUdp(packet, view, ref address);
+        }
+
+        if (_nat.IsClosedStrict(view.SourcePort, new IPAddress(view.DestinationAddress), view.DestinationPort))
+        {
+            Interlocked.Increment(ref _refusedPacketsDropped);
+            return PacketAction.Drop;
         }
 
         // Reply from the redirect listener on its way back to the application.
@@ -942,6 +952,11 @@ public sealed class DivertPipeline : IAsyncDisposable
         if (view.IsTcpSyn && !HasDecision(view))
         {
             WaitForDecision(view);
+            // Destination policies must not fail open when the socket pump misses its deadline.
+            if (!HasDecision(view) && _engine().Snapshot.DomainsCount > 0)
+            {
+                return PacketAction.Drop;
+            }
         }
 
         // A connection held for verification, or refused, goes nowhere. Checked against the recorded
@@ -978,6 +993,14 @@ public sealed class DivertPipeline : IAsyncDisposable
             }
             else if (!entry.SynRedirected)
             {
+                if (entry.Action == RouteAction.ProxyOnly)
+                {
+                    // A strict decision arriving after SYN must terminate the flow, not preserve
+                    // an established direct connection. The application can retry through the lane.
+                    Interlocked.Increment(ref _refusedPacketsDropped);
+                    return PacketAction.Drop;
+                }
+
                 if (Interlocked.Increment(ref _lateDecisions) is 1 or 50)
                 {
                     SplitLaneLog.Warning(
@@ -1009,6 +1032,25 @@ public sealed class DivertPipeline : IAsyncDisposable
             }
         }
 
+        var snapshot = _engine().Snapshot;
+        if (snapshot.DomainsCount > 0 &&
+            !(_nat.TryGetVerdict(view.SourcePort, out var directAddress, out var directPort, out var directVerdict) &&
+              directVerdict == NatVerdict.Direct && directPort == view.DestinationPort &&
+              AddressMatches(view.DestinationAddress, directAddress)))
+        {
+            // CLOSE and final kernel packets travel on separate queues. A tombstone narrows the
+            // race but cannot cover packets that arrive before CLOSE itself. Lost attribution of
+            // a known strict destination must therefore refuse, not fall back to reinjection.
+            var destination = new IPAddress(view.DestinationAddress);
+            var unknown = new FlowDescriptor(0, string.Empty, destination.ToString(),
+                view.DestinationPort, FlowProtocol.Tcp, _dns.Lookup(destination));
+            if (snapshot.HasStrictDomainCandidate(unknown))
+            {
+                Interlocked.Increment(ref _refusedPacketsDropped);
+                return PacketAction.Drop;
+            }
+        }
+
         return PacketAction.Forward;
     }
 
@@ -1031,7 +1073,44 @@ public sealed class DivertPipeline : IAsyncDisposable
             return PacketAction.Rewritten;
         }
 
-        if (!_udpPortOwners.TryGetValue(view.SourcePort, out var decision))
+        var engine = _engine();
+        IPAddress? destination = null;
+        RouteDecision resolved = RouteDecision.DirectDefault;
+        var action = _udpPortOwners.TryGetValue(view.SourcePort, out var selected)
+            ? selected.Action : RouteAction.Direct;
+        if (engine.Snapshot.DomainsCount > 0)
+        {
+            destination = new IPAddress(view.DestinationAddress);
+            if (!_udpFlows.TryGetValue(view.SourcePort, out var basis))
+            {
+                // BIND may race the first datagram, but that must not block unrelated traffic
+                // (especially DNS itself). Hold only destinations with a candidate domain rule.
+                var unattributed = new FlowDescriptor(0, string.Empty, destination.ToString(),
+                    view.DestinationPort, FlowProtocol.Udp, _dns.Lookup(destination));
+                if (engine.Snapshot.HasDomainCandidate(unattributed))
+                {
+                    return PacketAction.Drop;
+                }
+
+                return action == RouteAction.Direct ? PacketAction.Forward : PacketAction.Drop;
+            }
+            resolved = engine.Decide(basis with
+            {
+                ExecutablePath = basis.ExecutablePath ?? string.Empty,
+                RemoteAddress = destination.ToString(),
+                RemotePort = view.DestinationPort,
+                RemoteHostname = _dns.Lookup(destination),
+                Protocol = FlowProtocol.Udp,
+            });
+            action = resolved.Action;
+        }
+        // Existing identity holds/mismatches retain their refusal until verification completes.
+        if (_udpPortOwners.TryGetValue(view.SourcePort, out var held) && held.Action == RouteAction.Block &&
+            resolved.Reason != RouteReasonKind.DomainRule)
+        {
+            action = RouteAction.Block;
+        }
+        if (action == RouteAction.Direct)
         {
             return PacketAction.Forward;
         }
@@ -1039,9 +1118,9 @@ public sealed class DivertPipeline : IAsyncDisposable
         // A selected application's datagram never leaves this machine as it is. Either it goes
         // through the proxy or it goes nowhere; forwarding it would be the silent bypass the design
         // exists to prevent.
-        if (decision.Action == RouteAction.Proxy && _udpRelay is not null && view.IsIPv4)
+        if (action is RouteAction.Proxy or RouteAction.ProxyOnly && _udpRelay is not null && view.IsIPv4)
         {
-            var destination = new IPAddress(view.DestinationAddress);
+            destination ??= new IPAddress(view.DestinationAddress);
             var lanePort = _udpRelay.LaneFor(view.SourcePort, destination, view.DestinationPort);
 
             if (lanePort is null)
@@ -1176,44 +1255,33 @@ public sealed class DivertPipeline : IAsyncDisposable
 
     // ---- DNS observer -----------------------------------------------------------------------
 
-    private void DnsLoop(DivertHandle handle)
+    private void ObserveDns(in PacketView view)
     {
-        var buffer = GC.AllocateArray<byte>(PacketBufferSize, pinned: true);
-
-        try
+        var bytes = view.Bytes;
+        var headerLength = view.Protocol == PacketView.ProtocolUdp ? 8 : (bytes[view.TransportOffset + 12] >> 4) * 4;
+        if (headerLength < (view.Protocol == PacketView.ProtocolUdp ? 8 : 20) ||
+            view.TransportOffset + headerLength >= bytes.Length)
         {
-            while (_running)
-            {
-                if (!handle.Receive(buffer, out var length, out _, out _))
-                {
-                    if (!_running)
-                    {
-                        return;
-                    }
-
-                    Thread.Sleep(5);
-                    continue;
-                }
-
-                if (!PacketView.TryParse(buffer.AsSpan(0, length), out var view) ||
-                    view.Protocol != PacketView.ProtocolUdp)
-                {
-                    continue;
-                }
-
-                // UDP header is eight bytes; the DNS message follows.
-                var payloadOffset = view.TransportOffset + 8;
-                if (payloadOffset >= length)
-                {
-                    continue;
-                }
-
-                _dns.IngestResponse(buffer.AsSpan(payloadOffset, length - payloadOffset));
-            }
+            return;
         }
-        catch (Exception ex) when (_running)
+        var payload = bytes[(view.TransportOffset + headerLength)..];
+        if (view.Protocol == PacketView.ProtocolUdp)
         {
-            SplitLaneLog.Error(LogCategory, "DNS observer stopped", ex);
+            _dns.IngestResponse(payload);
+        }
+        else
+        {
+            // TCP DNS has a two-byte length prefix. Partial frames are not interpreted as evidence.
+            while (payload.Length >= 2)
+            {
+                var length = System.Buffers.Binary.BinaryPrimitives.ReadUInt16BigEndian(payload);
+                if (length == 0 || length > payload.Length - 2)
+                {
+                    return;
+                }
+                _dns.IngestResponse(payload.Slice(2, length));
+                payload = payload[(2 + length)..];
+            }
         }
     }
 
@@ -1222,7 +1290,7 @@ public sealed class DivertPipeline : IAsyncDisposable
     /// <summary>Stops the threads and closes the handles.</summary>
     public async ValueTask DisposeAsync()
     {
-        if (!_running && _socketHandle is null && _networkHandle is null && _dnsHandle is null)
+        if (!_running && _socketHandle is null && _networkHandle is null)
         {
             return;
         }
@@ -1241,30 +1309,26 @@ public sealed class DivertPipeline : IAsyncDisposable
 
         ShutDownHandle(_socketHandle, "socket");
         ShutDownHandle(_networkHandle, "network");
-        ShutDownHandle(_dnsHandle, "dns");
         ShutDownHandle(_traceHandle, "trace");
 
         await Task.WhenAll(
             JoinAsync(_socketThread),
             JoinAsync(_networkThread),
-            JoinAsync(_dnsThread),
             JoinAsync(_traceThread)).ConfigureAwait(false);
 
         _socketHandle?.Dispose();
         _networkHandle?.Dispose();
-        _dnsHandle?.Dispose();
         _traceHandle?.Dispose();
 
         _socketHandle = null;
         _networkHandle = null;
-        _dnsHandle = null;
         _traceHandle = null;
         _socketThread = null;
         _networkThread = null;
-        _dnsThread = null;
         _traceThread = null;
 
         _udpPortOwners.Clear();
+        _udpFlows.Clear();
         _udpOrigins.Clear();
         _pendingTcp.Clear();
         _pendingUdp.Clear();

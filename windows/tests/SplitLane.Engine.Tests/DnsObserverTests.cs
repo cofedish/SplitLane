@@ -247,13 +247,56 @@ public sealed class DnsObserverTests
     }
 
     [Fact]
-    public void AMostRecentAnswerWinsForTheSameAddress()
+    public void SharedAddressesDoNotPretendToHaveOneHostname()
     {
         var observer = new DnsObserver();
 
         observer.Record(IPAddress.Parse("1.2.3.4"), "first.example");
         observer.Record(IPAddress.Parse("1.2.3.4"), "second.example");
 
-        Assert.Equal("second.example", observer.Lookup(IPAddress.Parse("1.2.3.4")));
+        Assert.Null(observer.Lookup(IPAddress.Parse("1.2.3.4")));
+    }
+
+    [Fact]
+    public void WireTtlExpiresAtItsDeadline()
+    {
+        var time = new FakeTimeProvider();
+        var observer = new DnsObserver(time);
+        observer.IngestResponse(BuildResponse("api.example.com", [(1, [1, 2, 3, 4])]));
+        time.Advance(TimeSpan.FromSeconds(300));
+        Assert.Null(observer.Lookup(IPAddress.Parse("1.2.3.4")));
+    }
+
+    [Fact]
+    public void ChangingAnAnswerReplacesTheOldAddresses()
+    {
+        var observer = new DnsObserver();
+        observer.IngestResponse(BuildResponse("api.example.com", [(1, [1, 2, 3, 4])]));
+        observer.IngestResponse(BuildResponse("api.example.com", [(1, [5, 6, 7, 8])]));
+        Assert.Null(observer.Lookup(IPAddress.Parse("1.2.3.4")));
+        Assert.Equal("api.example.com", observer.Lookup(IPAddress.Parse("5.6.7.8")));
+    }
+
+    [Fact]
+    public void DuplicateAnswersDoNotMakeAnAddressAmbiguous()
+    {
+        var observer = new DnsObserver();
+        observer.IngestResponse(BuildResponse("api.example.com", [(1, [1, 2, 3, 4]), (1, [1, 2, 3, 4])]));
+        Assert.Equal("api.example.com", observer.Lookup(IPAddress.Parse("1.2.3.4")));
+        Assert.Equal(1, observer.Count);
+    }
+
+    [Fact]
+    public void ArbitraryMalformedInputIsBoundedAndDoesNotThrow()
+    {
+        var observer = new DnsObserver();
+        var random = new Random(17);
+        for (var i = 0; i < 5000; i++)
+        {
+            var bytes = new byte[random.Next(512)];
+            random.NextBytes(bytes);
+            observer.IngestResponse(bytes);
+        }
+        Assert.True(observer.Count <= observer.MaxEntries);
     }
 }
