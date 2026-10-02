@@ -43,6 +43,9 @@
         <DataTemplate DataType="{x:Type vm:ApplicationsViewModel}">
             <views:ApplicationsView />
         </DataTemplate>
+        <DataTemplate DataType="{x:Type vm:DomainRulesViewModel}">
+            <views:DomainRulesView />
+        </DataTemplate>
         <DataTemplate DataType="{x:Type vm:ProxyViewModel}">
             <views:ProxyView />
         </DataTemplate>
@@ -169,6 +172,9 @@
                                                      Converter={StaticResource EnumEquals},
                                                      ConverterParameter=Proxy}" />
 
+                        <infra:NavButton Style="{StaticResource NavItem}" Content="Правила доменов"
+                                         Icon="{StaticResource IconApps}" AutomationProperties.AutomationId="NavDomains"
+                                         IsChecked="{Binding Page, Mode=TwoWay, Converter={StaticResource EnumEquals}, ConverterParameter=Domains}" />
                         <TextBlock Text="DIAGNOSTICS" Style="{StaticResource SectionTitle}" Margin="27,20,0,9" />
 
                         <infra:NavButton Style="{StaticResource NavItem}"

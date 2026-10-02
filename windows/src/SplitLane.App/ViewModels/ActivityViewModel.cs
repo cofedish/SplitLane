@@ -53,7 +53,7 @@ public sealed class ConnectionRowViewModel(ConnectionEvent connection)
     public bool IsFailure => Connection.State is ConnectionState.Failed or ConnectionState.Blocked;
 
     /// <summary>Whether this row is in the proxy lane.</summary>
-    public bool IsProxied => Connection.Route == RouteAction.Proxy;
+    public bool IsProxied => Connection.Route is RouteAction.Proxy or RouteAction.ProxyOnly;
 
     /// <summary>Full detail for the tooltip.</summary>
     public string Tooltip =>

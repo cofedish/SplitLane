@@ -481,6 +481,7 @@ public static class RulePresentation
     private static string Consequence(AppRule rule) => rule.EffectiveAction switch
     {
         RouteAction.Proxy => ", so this application's traffic is going DIRECT",
+        RouteAction.ProxyOnly => ", so this application's proxy-only policy is not enforced",
         RouteAction.Block => ", so this application is not being blocked",
         _ => string.Empty,
     };

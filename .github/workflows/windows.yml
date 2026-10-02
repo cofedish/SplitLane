@@ -244,36 +244,5 @@ jobs:
         with:
           files: release/*
           draft: false
-          generate_release_notes: true
-          body: |
-            ## SplitLane for Windows
-
-            Per-application network routing. Selected applications go through the proxy; everything
-            else is left alone.
-
-            ### Install
-
-            Run the MSI and open **SplitLane**. That is the whole procedure: the divert driver is
-            included, and the engine is installed as a service that starts with Windows.
-
-            The portable archive works the same way, except that nothing registers a service — run
-            `Engine\SplitLane.Engine.exe` from an elevated prompt before opening the app.
-
-            To see why the divert layer will not start on a particular machine:
-
-            ```powershell
-            & "C:\Program Files\SplitLane\Engine\SplitLane.Engine.exe" --check
-            ```
-
-            ### Before you install
-
-            These binaries are **not code-signed**, so SmartScreen will warn on first run. Verify the
-            SHA-256 hashes in `SHA256SUMS.txt` against the workflow run that produced them.
-
-            The divert layer has been verified against the driver on a live machine: a selected
-            application's connections reach the proxy, including six applications at once under load,
-            and an unselected control does not. See `windows/docs/THREAT_MODEL.md` for what was and was
-            not established.
-
-            Application identity - a rule following its application through updates and moves by
-            verified publisher - is unit- and integration-tested, but not yet verified against the driver.
+          generate_release_notes: false
+          body_path: windows/docs/releases/${{ github.ref_name }}.md

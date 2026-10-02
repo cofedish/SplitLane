@@ -247,6 +247,7 @@
                                                   SelectedValue="{Binding Action}"
                                                   SelectedValuePath="Content">
                                             <ComboBoxItem Content="{x:Static models:RouteAction.Proxy}" />
+                                            <ComboBoxItem Content="{x:Static models:RouteAction.ProxyOnly}" />
                                             <ComboBoxItem Content="{x:Static models:RouteAction.Direct}" />
                                             <ComboBoxItem Content="{x:Static models:RouteAction.Block}" />
                                         </ComboBox>

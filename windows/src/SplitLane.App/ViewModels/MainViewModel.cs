@@ -17,6 +17,9 @@ public enum AppPage
     /// <summary>Rules.</summary>
     Applications,
 
+    /// <summary>Destination policies.</summary>
+    Domains,
+
     /// <summary>Upstream proxy.</summary>
     Proxy,
 
@@ -72,11 +75,13 @@ public sealed class MainViewModel : ObservableObject
 
         Overview = new OverviewViewModel(this);
         Applications = new ApplicationsViewModel(this);
+        Domains = new DomainRulesViewModel(this);
         Proxy = new ProxyViewModel(this);
         Activity = new ActivityViewModel(this);
         Settings = new SettingsViewModel(this);
 
         Applications.LoadFrom(_configuration);
+        Domains.LoadFrom(_configuration);
         Proxy.LoadFrom(_configuration);
         Settings.LoadFrom(_configuration);
         BeginMigration(_configuration);
@@ -142,6 +147,9 @@ public sealed class MainViewModel : ObservableObject
     /// <summary>The Applications page.</summary>
     public ApplicationsViewModel Applications { get; }
 
+    /// <summary>The destination policy editor.</summary>
+    public DomainRulesViewModel Domains { get; }
+
     /// <summary>The Proxy page.</summary>
     public ProxyViewModel Proxy { get; }
 
@@ -168,6 +176,7 @@ public sealed class MainViewModel : ObservableObject
         {
             if (Set(ref _page, value))
             {
+                if (value == AppPage.Domains) Domains.RefreshApplications();
                 Raise(nameof(IsOverview));
                 Raise(nameof(IsApplications));
                 Raise(nameof(IsProxy));
@@ -192,6 +201,7 @@ public sealed class MainViewModel : ObservableObject
     {
         AppPage.Overview => Overview,
         AppPage.Applications => Applications,
+        AppPage.Domains => Domains,
         AppPage.Proxy => Proxy,
         AppPage.Activity => Activity,
         _ => Settings,
@@ -217,6 +227,7 @@ public sealed class MainViewModel : ObservableObject
     {
         AppPage.Overview => "Overview",
         AppPage.Applications => "Applications",
+        AppPage.Domains => "Правила доменов",
         AppPage.Proxy => "Proxy",
         AppPage.Activity => "Activity",
         _ => "Settings",
@@ -231,6 +242,7 @@ public sealed class MainViewModel : ObservableObject
             "Pick the applications that belong in the proxy lane. Anything not listed here stays DIRECT.",
         AppPage.Proxy =>
             "Where the proxy lane points. A selected application whose proxy is unreachable fails — it never falls back to DIRECT.",
+        AppPage.Domains => "Выберите маршрут для домена: Direct, Proxy, Proxy only или Block.",
         AppPage.Activity =>
             "Connections SplitLane handled. DIRECT decisions are counted, not listed.",
         _ => "Diagnostics, storage locations, and how the divert layer is doing.",
@@ -352,6 +364,7 @@ public sealed class MainViewModel : ObservableObject
         {
             Configuration = Store.Load(out var error);
             Applications.LoadFrom(Configuration);
+            Domains.LoadFrom(Configuration);
             Proxy.LoadFrom(Configuration);
             Settings.LoadFrom(Configuration);
             HasUnsavedChanges = false;
@@ -446,6 +459,7 @@ public sealed class MainViewModel : ObservableObject
             var edited = Configuration with
             {
                 Rules = Applications.ToRules(),
+                DomainRules = Domains.ToRules(),
                 Proxy = Proxy.ToProxyConfiguration(),
                 IsRoutingEnabled = Overview.IsRoutingEnabled,
                 LogsDirectFlows = Settings.LogsDirectFlows,

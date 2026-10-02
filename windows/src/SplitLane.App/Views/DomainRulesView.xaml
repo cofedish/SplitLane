@@ -1,0 +1,67 @@
+<UserControl x:Class="SplitLane.App.Views.DomainRulesView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:models="clr-namespace:SplitLane.Core.Models;assembly=SplitLane.Core">
+    <DockPanel>
+        <StackPanel DockPanel.Dock="Top" Margin="0,0,0,16">
+            <Button Content="Добавить правило" Style="{StaticResource PrimaryButton}"
+                    HorizontalAlignment="Right" Command="{Binding AddCommand}"
+                    AutomationProperties.AutomationId="AddDomainRule" />
+            <TextBlock Style="{StaticResource BodyText}" Margin="0,12,0,0" TextWrapping="Wrap"
+                       Text="Proxy only: блокировать трафик, если proxy недоступен. Прямое подключение запрещено. Proxy сохраняет текущую семантику SplitLane и тоже не делает direct retry при ошибке." />
+            <TextBlock Style="{StaticResource BodyText}" Margin="0,8,0,0" TextWrapping="Wrap"
+                       Text="Правила используют наблюдаемый DNS. DNS cache, DoH/DoT и неоднозначные shared IP могут скрыть домен. Остановка службы снимает защиту; это не постоянный Windows kill switch." />
+            <TextBlock Style="{StaticResource BodyText}" Margin="0,8,0,0" TextWrapping="Wrap"
+                       Text="Для выбранного приложения сначала добавьте его на странице Applications. Более специфичное правило приложения и домена имеет приоритет. *.example.com не включает example.com." />
+        </StackPanel>
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <ItemsControl ItemsSource="{Binding Rules}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Border Style="{StaticResource Card}" Margin="0,0,8,12">
+                            <StackPanel>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="150" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Margin="0,0,16,0">
+                                        <TextBlock Text="Домен" Style="{StaticResource FieldLabel}" />
+                                        <TextBox Text="{Binding Pattern, UpdateSourceTrigger=PropertyChanged}"
+                                                 Style="{StaticResource Field}" AutomationProperties.AutomationId="DomainPattern"
+                                                 AutomationProperties.Name="Домен или wildcard" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1" Margin="0,0,16,0">
+                                        <TextBlock Text="Действие" Style="{StaticResource FieldLabel}" />
+                                        <ComboBox Style="{StaticResource Dropdown}" SelectedValue="{Binding Action}"
+                                                  SelectedValuePath="Tag" AutomationProperties.AutomationId="DomainAction"
+                                                  AutomationProperties.Name="Действие правила">
+                                            <ComboBoxItem Content="Direct" Tag="{x:Static models:RouteAction.Direct}" />
+                                            <ComboBoxItem Content="Proxy" Tag="{x:Static models:RouteAction.Proxy}" />
+                                            <ComboBoxItem Content="Proxy only" Tag="{x:Static models:RouteAction.ProxyOnly}" />
+                                            <ComboBoxItem Content="Block" Tag="{x:Static models:RouteAction.Block}" />
+                                        </ComboBox>
+                                    </StackPanel>
+                                    <Button Grid.Column="2" Content="Удалить" VerticalAlignment="Bottom"
+                                            Style="{StaticResource DangerButton}" CommandParameter="{Binding}"
+                                            AutomationProperties.AutomationId="RemoveDomainRule"
+                                            Command="{Binding DataContext.RemoveCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}" />
+                                </Grid>
+                                <TextBlock Text="Применять к" Style="{StaticResource FieldLabel}" Margin="0,12,0,0" />
+                                <ComboBox Style="{StaticResource Dropdown}" DisplayMemberPath="Label" SelectedValuePath="Id"
+                                          SelectedValue="{Binding ProcessRuleId}" AutomationProperties.AutomationId="DomainApplication"
+                                          AutomationProperties.Name="Применять к приложению"
+                                          ItemsSource="{Binding DataContext.Applications, RelativeSource={RelativeSource AncestorType=ItemsControl}}" />
+                                <CheckBox Content="Включено" IsChecked="{Binding IsEnabled}" Style="{StaticResource Check}"
+                                          Margin="0,12,0,0" AutomationProperties.AutomationId="DomainEnabled" />
+                                <TextBlock Text="{Binding Error}" Foreground="{DynamicResource WarningBrush}"
+                                           TextWrapping="Wrap" Margin="0,8,0,0" AutomationProperties.AutomationId="DomainError" />
+                            </StackPanel>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
+    </DockPanel>
+</UserControl>

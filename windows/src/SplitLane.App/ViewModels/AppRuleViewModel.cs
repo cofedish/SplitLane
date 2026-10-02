@@ -234,12 +234,13 @@ public sealed class AppRuleViewModel : ObservableObject
     public string LaneLabel => !IsEnabled || _status == RuleStatus.NeedsReselection ? "OFF" : Action switch
     {
         RouteAction.Proxy => "PROXY",
+        RouteAction.ProxyOnly => "PROXY ONLY",
         RouteAction.Block => "BLOCKED",
         _ => "DIRECT",
     };
 
     /// <summary>Whether the row should read as being in the proxy lane.</summary>
-    public bool IsProxied => IsEnabled && _status == RuleStatus.Active && Action == RouteAction.Proxy;
+    public bool IsProxied => IsEnabled && _status == RuleStatus.Active && Action is RouteAction.Proxy or RouteAction.ProxyOnly;
 
     /// <summary>One line describing what the rule covers.</summary>
     public string MatchSummary => RulePresentation.MatchSummary(ToRule());

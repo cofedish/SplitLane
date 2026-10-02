@@ -323,6 +323,7 @@ public sealed class ApplicationsViewModel : ObservableObject
                 continue;
             }
 
+            _main.Domains.Rebind(row.ExecutablePath, migrated.Id);
             row.AdoptMigrated(migrated);
             Observe(row);
         }
@@ -524,6 +525,7 @@ public sealed class ApplicationsViewModel : ObservableObject
             return;
         }
 
+        _main.Domains.Rebind(row.ExecutablePath, identity.ExecutablePath);
         row.Reselect(identity);
         Observe(row);
         RaiseCounts();
