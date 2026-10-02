@@ -305,7 +305,7 @@ public sealed class IdentityEngineTests : IDisposable
         Assert.Equal(MatchMode.Exact, rules[1].MatchMode);
 
         Assert.True(File.Exists(v2));
-        Assert.Equal(2, ConfigurationCodec.DecodeFromJson(await File.ReadAllTextAsync(v2)).Version.SchemaVersion);
+        Assert.Equal(ConfigurationVersion.CurrentSchema, ConfigurationCodec.DecodeFromJson(await File.ReadAllTextAsync(v2)).Version.SchemaVersion);
         Assert.Equal(legacyHash, SHA256.HashData(await File.ReadAllBytesAsync(legacy)));
         Assert.Equal(v2, store.SourcePath);
     }

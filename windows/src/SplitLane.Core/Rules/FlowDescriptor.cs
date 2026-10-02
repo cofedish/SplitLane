@@ -35,8 +35,8 @@ public enum FlowProtocol
 /// <param name="RemoteHostname">
 /// Hostname the destination address was most recently resolved from, when the DNS observer saw the
 /// answer. Null otherwise, and null is the common case for an address the application had cached.
-/// Used only to prefer <c>ATYP=DOMAIN</c> in the SOCKS5 request; never used for routing, because a
-/// name is what the application asked for rather than where the packet goes.
+/// Used for destination policies and proxy hostname requests. DNS evidence is TTL-bound and
+/// unavailable for ambiguous shared addresses; an IP alone cannot prove the intended hostname.
 /// </param>
 /// <param name="IsEngineTraffic">
 /// True when the flow belongs to the SplitLane engine itself. First layer of proxy-loop defence.

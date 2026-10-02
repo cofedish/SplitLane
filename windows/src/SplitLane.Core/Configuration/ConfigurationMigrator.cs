@@ -115,11 +115,31 @@ public static class ConfigurationMigrator
         var result = configuration with
         {
             Rules = rules,
+            DomainRules = RebindDomainRules(configuration.DomainRules, configuration.Rules, rules),
             Version = new ConfigurationVersion(ConfigurationVersion.CurrentSchema, configuration.Version.Generation),
         };
 
         return new MigrationResult(result, report);
     }
+
+    /// <summary>Keeps scoped destination rules attached when migration re-anchors an application.</summary>
+    public static IReadOnlyList<DomainRule> RebindDomainRules(
+        IReadOnlyList<DomainRule> domains, IReadOnlyList<AppRule> before, IReadOnlyList<AppRule> after) =>
+        domains.Select(domain =>
+        {
+            if (domain.ProcessRuleId is not { } id)
+            {
+                return domain;
+            }
+            for (var i = 0; i < Math.Min(before.Count, after.Count); i++)
+            {
+                if (ExecutablePath.Comparer.Equals(before[i].Id, id))
+                {
+                    return domain with { ProcessRuleId = after[i].Id };
+                }
+            }
+            return domain;
+        }).ToArray();
 
     /// <summary>
     /// The identity to record for a file the user picked, from its evidence.

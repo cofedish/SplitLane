@@ -110,7 +110,7 @@ public static class PolicyMerger
         // A managed PROXY rule sends its application wherever the user's proxy points, when the policy
         // does not say where. A user who points it at a forwarder of their own has made the rule a
         // DIRECT one. Reported every time, because it is the one thing an administrator must decide.
-        if (policy.Proxy is null && managed.Any(rule => rule.Action == RouteAction.Proxy))
+        if (policy.Proxy is null && managed.Any(rule => rule.Action is RouteAction.Proxy or RouteAction.ProxyOnly))
         {
             notes.Add("managed PROXY rules use the proxy the user configured, because the policy sets no " +
                       "proxy; set \"proxy\" in the policy if the upstream must be the organisation's");
@@ -121,6 +121,7 @@ public static class PolicyMerger
             Rules = [.. managed, .. userRules],
             IsRoutingEnabled = policy.ForceRoutingEnabled || user.IsRoutingEnabled,
             Proxy = policy.Proxy ?? user.Proxy,
+            DomainRules = policy.AllowUserRules ? user.DomainRules : [],
         };
 
         return new PolicyOutcome(effective, notes, managed.Count, dropped);

@@ -25,6 +25,9 @@ public enum RouteAction
     /// rule.
     /// </summary>
     Block = 2,
+
+    /// <summary>Only the proxy path is permitted; a failed dependency must never cause DIRECT fallback.</summary>
+    ProxyOnly = 3,
 }
 
 /// <summary>
@@ -103,6 +106,9 @@ public enum RouteReasonKind
     /// inherits the rule nor the selected application's traffic leaks out DIRECT.
     /// </summary>
     IdentityMismatch = 13,
+
+    /// <summary>A destination-domain policy matched.</summary>
+    DomainRule = 14,
 }
 
 /// <summary>
@@ -155,6 +161,7 @@ public readonly record struct RouteDecision(
         RouteReasonKind.FileHashRule => $"file hash pinned by {RuleKey}",
         RouteReasonKind.IdentityPending => $"held while {MatchedPath} is verified against {RuleKey}",
         RouteReasonKind.IdentityMismatch => $"{MatchedPath} is no longer the application {RuleKey} was made for",
+        RouteReasonKind.DomainRule => $"domain rule {RuleKey}; direct fallback prohibited for ProxyOnly",
         _ => Reason.ToString(),
     };
 }

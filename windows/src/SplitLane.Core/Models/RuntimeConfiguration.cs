@@ -25,7 +25,7 @@ public readonly record struct ConfigurationVersion(int SchemaVersion, ulong Gene
     /// its own so that a build from before schema 2, installed as a rollback, still finds the schema 1
     /// file it understands.
     /// </remarks>
-    public const int CurrentSchema = 2;
+    public const int CurrentSchema = 3;
 
     /// <summary>The schema before application identity: every rule keyed on a path.</summary>
     public const int PathSchema = 1;
@@ -66,6 +66,9 @@ public sealed record RuntimeConfiguration
 
     /// <summary>The user's rules.</summary>
     public IReadOnlyList<AppRule> Rules { get; init; } = [];
+
+    /// <summary>Destination policies; empty preserves application-only routing.</summary>
+    public IReadOnlyList<DomainRule> DomainRules { get; init; } = [];
 
     /// <summary>The upstream the PROXY lane points at.</summary>
     public ProxyConfiguration Proxy { get; init; } = ProxyConfiguration.Default;
@@ -129,7 +132,7 @@ public sealed record RuntimeConfiguration
     /// <summary>Rules currently routing to the PROXY lane.</summary>
     [JsonIgnore]
     public IEnumerable<AppRule> ProxiedRules =>
-        Rules.Where(rule => rule.IsEnabled && rule.Action == RouteAction.Proxy);
+        Rules.Where(rule => rule.IsEnabled && rule.Action is RouteAction.Proxy or RouteAction.ProxyOnly);
 
     /// <summary>Returns a copy with the generation advanced.</summary>
     public RuntimeConfiguration WithNextGeneration() => this with { Version = Version.NextGeneration() };

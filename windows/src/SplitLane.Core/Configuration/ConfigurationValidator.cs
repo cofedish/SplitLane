@@ -38,6 +38,9 @@ public enum ConfigurationValidationCode
 
     /// <summary>More rules than the engine will take.</summary>
     TooManyRules,
+
+    /// <summary>A destination policy contains an invalid matcher, action or application reference.</summary>
+    InvalidDomainRule,
 }
 
 /// <summary>A configuration that cannot be applied, and why.</summary>
@@ -81,7 +84,7 @@ public static class ConfigurationValidator
     {
         ArgumentNullException.ThrowIfNull(configuration);
 
-        if (configuration.Rules.Count > MaxRules)
+        if (configuration.Rules.Count + configuration.DomainRules.Count > MaxRules)
         {
             throw new ConfigurationValidationException(
                 ConfigurationValidationCode.TooManyRules,
@@ -123,6 +126,7 @@ public static class ConfigurationValidator
             }
         }
 
+        ValidateDomainRules(configuration);
         Validate(configuration.Proxy);
 
         if (configuration.RedirectPort != 0 &&
@@ -188,6 +192,8 @@ public static class ConfigurationValidator
     public static RuntimeConfiguration Sanitize(RuntimeConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
+        // Never silently discard an invalid strict policy on load.
+        ValidateDomainRules(configuration);
 
         var rules = new List<AppRule>(configuration.Rules.Count);
         var seen = new HashSet<string>(ExecutablePath.Comparer);
@@ -223,6 +229,26 @@ public static class ConfigurationValidator
         }
 
         return configuration with { Rules = rules };
+    }
+
+    private static void ValidateDomainRules(RuntimeConfiguration configuration)
+    {
+        if (configuration.DomainRules.Count > MaxRules)
+        {
+            throw new ConfigurationValidationException(ConfigurationValidationCode.TooManyRules, "Too many domain rules");
+        }
+
+        foreach (var rule in configuration.DomainRules)
+        {
+            if (!DomainPattern.TryParse(rule.Pattern, out _, out var error) ||
+                !Enum.IsDefined(rule.Action) || (rule.Protocol is { } protocol && !Enum.IsDefined(protocol)) ||
+                (rule.Destination is { } destination && !System.Net.IPNetwork.TryParse(destination, out _)) ||
+                (rule.ProcessRuleId is { } id && !configuration.Rules.Any(r => ExecutablePath.Comparer.Equals(r.Id, id))))
+            {
+                throw new ConfigurationValidationException(ConfigurationValidationCode.InvalidDomainRule,
+                    $"Invalid domain rule '{rule.Pattern}': {error ?? "invalid selector, action or application reference"}");
+            }
+        }
     }
 
     /// <summary>The part an identity needs and does not have, or null when it is complete.</summary>

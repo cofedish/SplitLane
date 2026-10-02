@@ -125,6 +125,7 @@ public sealed class RuleSnapshot
         IsRoutingEnabled = configuration.IsRoutingEnabled;
         LogsDirectFlows = configuration.LogsDirectFlows;
         ProxiesUdp = configuration.RelaysUdp;
+        Domains = new DomainPolicySnapshot(configuration);
     }
 
     /// <summary>Tables for one tier of rules, with no settings of their own.</summary>
@@ -218,11 +219,22 @@ public sealed class RuleSnapshot
     /// </summary>
     public bool ProxiesUdp { get; }
 
+    internal DomainPolicySnapshot? Domains { get; }
+
+    /// <summary>Active destination rules, used to enable destination enforcement on packet paths.</summary>
+    public int DomainsCount => Domains?.Count ?? 0;
+
+    /// <summary>Whether missing process attribution could hide a destination rule.</summary>
+    public bool HasDomainCandidate(in FlowDescriptor flow) => Domains?.HasCandidate(flow) == true;
+
+    /// <summary>A strict destination cannot be guessed DIRECT when its connection attribution is lost.</summary>
+    public bool HasStrictDomainCandidate(in FlowDescriptor flow) => Domains?.HasCandidate(flow, strictOnly: true) == true;
+
     /// <summary>An engine with no rules at all. Every flow goes DIRECT.</summary>
     public static readonly RuleSnapshot Empty = new(RuntimeConfiguration.Empty);
 
     /// <summary>Number of rules that can route traffic, managed ones included. Diagnostic only.</summary>
-    public int ActiveRuleCount => _activeRules + (_managed?.ActiveRuleCount ?? 0);
+    public int ActiveRuleCount => _activeRules + (_managed?.ActiveRuleCount ?? 0) + (Domains?.Count ?? 0);
 
     /// <summary>Number of managed rules in force. Diagnostic only.</summary>
     public int ManagedRuleCount => _managed?.ActiveRuleCount ?? 0;
@@ -240,10 +252,10 @@ public sealed class RuleSnapshot
     /// Whether some rule can only be claimed through the product name, so the caller must read the
     /// version resource of a new executable before asking.
     /// </summary>
-    public bool NeedsProductName => _signedByProduct.Count > 0 || (_managed?.NeedsProductName ?? false);
+    public bool NeedsProductName => _signedByProduct.Count > 0 || (_managed?.NeedsProductName ?? false) || Domains?.NeedsProductName == true;
 
     /// <summary>Whether some rule pins an unsigned file, so the caller must supply file sizes.</summary>
-    public bool NeedsFileSize => _unsignedBySize.Count > 0 || (_managed?.NeedsFileSize ?? false);
+    public bool NeedsFileSize => _unsignedBySize.Count > 0 || (_managed?.NeedsFileSize ?? false) || Domains?.NeedsFileSize == true;
 
     private int _activeRules;
     private int _identityRules;
@@ -803,13 +815,20 @@ public sealed class RuleEngine
         }
 
         var path = flow.ExecutablePath;
+        var appMatch = string.IsNullOrEmpty(path) ? RuleMatch.None : Snapshot.Match(flow.Image ?? ImageEvidence.FromPath(path));
+        // The managed application tier remains authoritative over every user destination policy.
+        if (appMatch.Rule?.IsManaged != true && appMatch.Needs == EvidenceNeeds.None &&
+            appMatch.Mismatched is null && Snapshot.Domains?.Decide(flow, Snapshot.ProxiesUdp) is { } domainDecision)
+        {
+            return domainDecision;
+        }
+
         if (string.IsNullOrEmpty(path))
         {
             return new RouteDecision(RouteAction.Direct, RouteReasonKind.UnidentifiedSource);
         }
 
-        var evidence = flow.Image ?? ImageEvidence.FromPath(path);
-        var match = Snapshot.Match(evidence);
+        var match = appMatch;
 
         if (match.Needs != EvidenceNeeds.None)
         {
@@ -856,6 +875,7 @@ public sealed class RuleEngine
                 return new RouteDecision(RouteAction.Block, reason, ruleKey, path);
 
             case RouteAction.Proxy:
+            case RouteAction.ProxyOnly:
                 // A selected app's UDP goes through the proxy when the proxy will carry it, and is
                 // refused when it will not. What it never does is go out unproxied: returning DIRECT
                 // here would be the silent bypass the whole design exists to prevent.
@@ -870,7 +890,7 @@ public sealed class RuleEngine
                         RouteAction.Block, RouteReasonKind.UdpNotSupported, ruleKey, path);
                 }
 
-                return new RouteDecision(RouteAction.Proxy, reason, ruleKey, path);
+                return new RouteDecision(rule.EffectiveAction, reason, ruleKey, path);
 
             default:
                 return RouteDecision.DirectDefault;

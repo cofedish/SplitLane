@@ -389,7 +389,7 @@ public sealed class IdentityMigrationTests
 
         Assert.Equal(result.Configuration.Rules[0].Identity.MatchKey, decoded.Rules[0].Identity.MatchKey);
         Assert.Equal(IdentityKind.Signed, decoded.Rules[0].Identity.Kind);
-        Assert.Equal(2, decoded.Version.SchemaVersion);
+        Assert.Equal(ConfigurationVersion.CurrentSchema, decoded.Version.SchemaVersion);
     }
 
     [Fact]
