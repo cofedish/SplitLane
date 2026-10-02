@@ -18,4 +18,3 @@
 - [x] Независимый post-routing PCAP и успешный domain CONNECT к исправному proxy.
 - [x] Release build и 729 успешных тестов; протокол и артефакты сохранены.
 - [x] Remy и `remy-service` сохранили прежние PID; служба SplitLane и конфигурация не изменялись.
-

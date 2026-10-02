@@ -133,4 +133,3 @@ public sealed class DomainPolicyTests
         Assert.Equal(RouteAction.Proxy, engine.Decide(Flow(host: null!)).Action);
     }
 }
-

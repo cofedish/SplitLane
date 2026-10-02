@@ -40,4 +40,3 @@ public sealed class DomainPatternTests
     public void MalformedPatternsAreRejected(string value) =>
         Assert.False(DomainPattern.TryParse(value, out _, out _));
 }
-

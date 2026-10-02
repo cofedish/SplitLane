@@ -44,4 +44,3 @@ Release build, formatting, аудит NuGet и diff review. Live-стенд ис
 положительным TCP/UDP контролем. Remy и её службы не останавливаются.
 
 Подробные фактические результаты: `windows/docs/DOMAIN_POLICY_VALIDATION.md`.
-
