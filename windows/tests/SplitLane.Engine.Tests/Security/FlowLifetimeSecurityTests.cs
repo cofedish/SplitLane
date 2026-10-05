@@ -41,6 +41,31 @@ public sealed class FlowLifetimeSecurityTests
     }
 
     [Fact]
+    public void A_quiet_connection_is_not_expired_while_it_is_relayed()
+    {
+        // An HTTP/2 or WebSocket connection can be silent for far longer than the idle limit, and
+        // Windows sends no keepalive by default. Expiring it would send its next segment DIRECT.
+        var time = new FakeTimeProvider(DateTimeOffset.Parse("2026-10-06T00:00:00Z"));
+        var nat = new NatTable(time);
+        var entry = Entry(time.GetUtcNow());
+        nat.Record(Key, entry);
+        nat.BeginRelay(entry);
+
+        time.Advance(TimeSpan.FromHours(3));
+        nat.Sweep();
+        Assert.True(nat.TryGet(Key, out _));
+        Assert.False(nat.IsClosedStrict(Key, Remote.Address, (ushort)Remote.Port));
+
+        // Once the relay ends, the idle limit counts from then.
+        nat.EndRelay(entry);
+        time.Advance(nat.EntryLifetime - TimeSpan.FromSeconds(1));
+        Assert.True(nat.TryGet(Key, out _));
+        time.Advance(TimeSpan.FromSeconds(2));
+        Assert.False(nat.TryGet(Key, out _));
+        Assert.True(nat.IsClosedStrict(Key, Remote.Address, (ushort)Remote.Port));
+    }
+
+    [Fact]
     public void An_idle_connection_expires()
     {
         var time = new FakeTimeProvider(DateTimeOffset.Parse("2026-10-06T00:00:00Z"));

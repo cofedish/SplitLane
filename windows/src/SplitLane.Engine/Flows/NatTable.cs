@@ -45,6 +45,7 @@ public sealed record NatEntry(
 
     private long _lastSeenTicks = CreatedAt.UtcTicks;
     private int _closing;
+    private int _relays;
 
     /// <summary>
     /// When a packet of this connection last passed, in either direction. Expiry is measured from here,
@@ -60,6 +61,21 @@ public sealed record NatEntry(
 
     /// <summary>Records that the connection is being torn down.</summary>
     internal void MarkClosing() => Volatile.Write(ref _closing, 1);
+
+    /// <summary>
+    /// Whether the redirect listener is relaying this connection. A relayed connection is never
+    /// idle-expired: TCP sends nothing on a quiet connection, and expiring it would send its next
+    /// segment DIRECT once the tombstone went too.
+    /// </summary>
+    public bool IsRelayed => Volatile.Read(ref _relays) > 0;
+
+    internal void BeginRelay() => Interlocked.Increment(ref _relays);
+
+    internal void EndRelay(DateTimeOffset now)
+    {
+        Interlocked.Decrement(ref _relays);
+        Touch(now);
+    }
 
     /// <summary>The policy action captured for this connection.</summary>
     public RouteAction Action { get; init; } = RouteAction.Proxy;
@@ -118,7 +134,8 @@ public enum NatVerdict
 /// Redirected entries expire after a period without traffic, not a fixed time after they were made
 /// (SL-SEC-004). They used to be dropped five minutes after creation however busy the connection was,
 /// after which its segments matched nothing and left DIRECT. The socket CLOSE remains the normal end;
-/// idle expiry only cleans up after a CLOSE that never arrived. A FIN or RST shortens the idle limit.
+/// idle expiry only cleans up after a CLOSE that never arrived, and never while the redirect listener
+/// is still relaying the connection. A FIN or RST shortens the idle limit.
 /// When a redirected entry ends - CLOSE or expiry - a short-lived tombstone refuses any packet that
 /// still turns up for it, so a late segment is dropped rather than sent DIRECT.
 /// </para>
@@ -156,6 +173,24 @@ public sealed class NatTable(TimeProvider? timeProvider = null)
         {
             entry.MarkClosing();
         }
+    }
+
+    /// <summary>
+    /// Records that the redirect listener has taken this connection, so it is not expired while the
+    /// relay lasts however quiet it is. Ended by <see cref="EndRelay"/>, after which the idle limit
+    /// counts from the moment the relay ended.
+    /// </summary>
+    public void BeginRelay(NatEntry entry)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+        entry.BeginRelay();
+    }
+
+    /// <summary>Records that the relay for a connection has ended.</summary>
+    public void EndRelay(NatEntry entry)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+        entry.EndRelay(_time.GetUtcNow());
     }
 
     /// <summary>Number of live entries.</summary>
@@ -438,24 +473,30 @@ public sealed class NatTable(TimeProvider? timeProvider = null)
 
     private bool Expired(NatEntry entry) =>
         entry.Action != RouteAction.ProxyOnly &&
+        !entry.IsRelayed &&
         _time.GetUtcNow() - entry.LastSeen > (entry.IsClosing ? ClosingLifetime : EntryLifetime);
 
     private bool IsLive(FlowKey key) => _entries.TryGetValue(key, out var entry) && !Expired(entry);
 
     private bool RemoveEntry(FlowKey key, NatEntry entry)
     {
-        if (!_entries.TryRemove(new KeyValuePair<FlowKey, NatEntry>(key, entry)))
+        // Under the gate, as Record is: otherwise an expiry racing a new connection on the same local
+        // end could take the new connection's slot, or leave a tombstone over its fresh row.
+        lock (_gate)
         {
-            return false;
+            if (!_entries.TryRemove(new KeyValuePair<FlowKey, NatEntry>(key, entry)))
+            {
+                return false;
+            }
+
+            _redirected.TryRemove(new KeyValuePair<PortSlot, FlowKey>(key.Slot, key));
+
+            // A tombstone: a segment of this connection that still turns up - after a CLOSE, or after
+            // idle expiry - is refused, never sent DIRECT. A new CONNECT on the same local end replaces it.
+            _closedStrict[key] = new DirectDecision(
+                entry.OriginalDestination, entry.OriginalDestinationPort, _time.GetUtcNow(), NatVerdict.Block, entry.EndpointId);
+            return true;
         }
-
-        _redirected.TryRemove(new KeyValuePair<PortSlot, FlowKey>(key.Slot, key));
-
-        // A tombstone: a segment of this connection that still turns up - after a CLOSE, or after idle
-        // expiry - is refused, never sent DIRECT. A new CONNECT on the same local end replaces it.
-        _closedStrict[key] = new DirectDecision(
-            entry.OriginalDestination, entry.OriginalDestinationPort, _time.GetUtcNow(), NatVerdict.Block, entry.EndpointId);
-        return true;
     }
 
     private readonly record struct DirectDecision(

@@ -234,6 +234,7 @@ public sealed class RedirectListener : IAsyncDisposable
     {
         var started = Stopwatch.GetTimestamp();
         ConnectionEvent? record = null;
+        NatEntry? relayed = null;
 
         try
         {
@@ -255,6 +256,10 @@ public sealed class RedirectListener : IAsyncDisposable
                 client.Dispose();
                 return;
             }
+
+            // Held for as long as the relay lasts, so a quiet connection is not expired under it.
+            _nat.BeginRelay(entry);
+            relayed = entry;
 
             var proxy = _proxy();
 
@@ -349,6 +354,11 @@ public sealed class RedirectListener : IAsyncDisposable
             if (record is not null)
             {
                 _statistics.MarkFinished(record.Id);
+            }
+
+            if (relayed is not null)
+            {
+                _nat.EndRelay(relayed);
             }
 
             client.Dispose();
