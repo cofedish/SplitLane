@@ -5,6 +5,7 @@ using System.Text.Json;
 using SplitLane.Core.Configuration;
 using SplitLane.Core.Ipc;
 using SplitLane.Core.Models;
+using SplitLane.Platform;
 
 namespace SplitLane.App.Services;
 
@@ -94,17 +95,29 @@ public sealed class EngineClient
     {
         try
         {
-            await using var pipe = new NamedPipeClientStream(
-                ".", EngineChannel.PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+            NamedPipeClientStream? connected;
+            string? impostor;
 
             try
             {
-                await pipe.ConnectAsync(ConnectTimeoutMilliseconds, cancellationToken).ConfigureAwait(false);
+                // Connected at the Identification level, and nothing is sent until the other end is
+                // known to be the service (SL-SEC-010): a pipe name is first come, first served, and
+                // while the engine is not listening anyone can take it.
+                (connected, impostor) = await EngineServerIdentity
+                    .ConnectAsync(EngineChannel.PipeName, ConnectTimeoutMilliseconds, cancellationToken)
+                    .ConfigureAwait(false);
             }
             catch (TimeoutException)
             {
                 return new EngineReply(false, Error: "The SplitLane engine is not running.");
             }
+
+            if (connected is null)
+            {
+                return new EngineReply(false, Error: $"Refused to use the control channel: {impostor}.");
+            }
+
+            await using var pipe = connected;
 
             var payload = JsonSerializer.SerializeToUtf8Bytes(request, ConfigurationCodec.Options);
             await WriteFrameAsync(pipe, payload, cancellationToken).ConfigureAwait(false);

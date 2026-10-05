@@ -55,43 +55,89 @@ public sealed class ControlServer : IAsyncDisposable
 
     private async Task AcceptLoopAsync(CancellationToken cancellationToken)
     {
-        while (!cancellationToken.IsCancellationRequested)
+        NamedPipeServerStream? pipe = null;
+
+        try
         {
-            NamedPipeServerStream? pipe = null;
-
-            try
+            while (!cancellationToken.IsCancellationRequested)
             {
-                pipe = CreatePipe();
-                await pipe.WaitForConnectionAsync(cancellationToken).ConfigureAwait(false);
-
-                // One request per connection. A long-lived multiplexed session would need its own
-                // framing state machine on the elevated side, and the app polls rarely enough that
-                // the extra connection costs nothing worth optimising.
-                await ServeAsync(pipe, cancellationToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                return;
-            }
-            catch (IOException ex)
-            {
-                SplitLaneLog.Debug(LogCategory, $"client disconnected: {ex.Message}");
-            }
-            catch (Exception ex)
-            {
-                SplitLaneLog.Error(LogCategory, "control channel error", ex);
-            }
-            finally
-            {
-                if (pipe is not null)
+                try
                 {
-                    await pipe.DisposeAsync().ConfigureAwait(false);
+                    // The first instance claims the name, or fails if someone else already holds it
+                    // (SL-SEC-010). After that a listening instance always exists: the next one is
+                    // created before the one just connected is served and closed, so the name is never
+                    // free for another process to take while the engine runs.
+                    pipe ??= await CreateFirstPipeAsync(cancellationToken).ConfigureAwait(false);
+                    await pipe.WaitForConnectionAsync(cancellationToken).ConfigureAwait(false);
+
+                    var connected = pipe;
+                    pipe = CreatePipe(firstInstance: false);
+
+                    try
+                    {
+                        // One request per connection. A long-lived multiplexed session would need its
+                        // own framing state machine on the elevated side, and the app polls rarely
+                        // enough that the extra connection costs nothing worth optimising.
+                        await ServeAsync(connected, cancellationToken).ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        await connected.DisposeAsync().ConfigureAwait(false);
+                    }
                 }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+                catch (IOException ex)
+                {
+                    SplitLaneLog.Debug(LogCategory, $"client disconnected: {ex.Message}");
+                }
+                catch (Exception ex)
+                {
+                    SplitLaneLog.Error(LogCategory, "control channel error", ex);
+                }
+            }
+        }
+        finally
+        {
+            if (pipe is not null)
+            {
+                await pipe.DisposeAsync().ConfigureAwait(false);
             }
         }
     }
 
-    private static NamedPipeServerStream CreatePipe()
+    /// <summary>Claims the pipe name, retrying while another process holds it.</summary>
+    private static async Task<NamedPipeServerStream> CreateFirstPipeAsync(CancellationToken cancellationToken)
+    {
+        var reported = false;
+
+        while (true)
+        {
+            try
+            {
+                return CreatePipe(firstInstance: true);
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+            {
+                if (!reported)
+                {
+                    // Not a transient error to swallow: something else is answering as the engine. The
+                    // window refuses to talk to it (it is not owned by SYSTEM), so it is visible there
+                    // too, but this is where the cause is named.
+                    SplitLaneLog.Error(
+                        LogCategory,
+                        $"the control channel name is held by another process ({ex.Message}); retrying");
+                    reported = true;
+                }
+
+                await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken).ConfigureAwait(false);
+            }
+        }
+    }
+
+    private static NamedPipeServerStream CreatePipe(bool firstInstance)
     {
         var security = new PipeSecurity();
 
@@ -115,7 +161,7 @@ public sealed class ControlServer : IAsyncDisposable
             PipeDirection.InOut,
             NamedPipeServerStream.MaxAllowedServerInstances,
             PipeTransmissionMode.Byte,
-            PipeOptions.Asynchronous,
+            firstInstance ? PipeOptions.Asynchronous | PipeOptions.FirstPipeInstance : PipeOptions.Asynchronous,
             inBufferSize: 0,
             outBufferSize: 0,
             security);
