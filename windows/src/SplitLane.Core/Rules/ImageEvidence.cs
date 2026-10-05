@@ -98,6 +98,14 @@ public sealed record ImageEvidence
     };
 
     /// <summary>
+    /// The package claim this evidence was built from, in the form <see cref="WithPackageClaim"/> takes.
+    /// Whatever re-decides a flow later passes this on, so an unverified claim stays one rather than
+    /// being lost and the process matched as unpackaged.
+    /// </summary>
+    public string? PackageClaim =>
+        PackageFamilyName ?? (UnverifiedPackageFamilyName is { } family ? "?" + family : null);
+
+    /// <summary>
     /// <c>ProductName</c> from the version resource, or null when there is none or it was not read.
     /// </summary>
     /// <remarks>

@@ -13,6 +13,20 @@ namespace SplitLane.Engine.Tests.Security;
 [Trait("Category", "Security")]
 public sealed class PackageOriginSecurityTests
 {
+    [Theory]
+    [InlineData("Contoso.App_8wekyb3d8bbwe")]
+    [InlineData("?Contoso.App_8wekyb3d8bbwe")]
+    [InlineData(null)]
+    public void A_claim_survives_being_passed_on_for_a_later_decision(string? claim)
+    {
+        // A UDP socket re-decided after a configuration change rebuilds its evidence from this. An
+        // unverified claim that came back as no claim would be matched as an unpackaged process.
+        var evidence = new ImageEvidence { ExecutablePath = @"C:\Apps\app.exe" }.WithPackageClaim(claim);
+
+        Assert.Equal(claim, evidence.PackageClaim);
+        Assert.Equal(evidence, new ImageEvidence { ExecutablePath = @"C:\Apps\app.exe" }.WithPackageClaim(evidence.PackageClaim));
+    }
+
     private const string Family = "Contoso.Chat_abc";
     private const string Executable = @"C:\Program Files\WindowsApps\Contoso.Chat_1.0.0.0_x64__abc\chat.exe";
 

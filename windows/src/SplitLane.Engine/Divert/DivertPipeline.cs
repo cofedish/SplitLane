@@ -599,6 +599,13 @@ public sealed class DivertPipeline : IAsyncDisposable
                 _udpSeen.TryRemove(new KeyValuePair<PortSlot, ulong>(slot, seen));
             }
 
+            var alias = slot with { IPv6 = false };
+            if (slot.IPv6 && _udpSeen.TryGetValue(alias, out var aliased) && aliased == seen && OwnedBy(aliased, endpointId))
+            {
+                // The IPv4 half of a dual-stack socket, recorded with it.
+                _udpSeen.TryRemove(new KeyValuePair<PortSlot, ulong>(alias, aliased));
+            }
+
             if (_pendingUdp.TryGetValue(slot, out var pending) && OwnedBy(pending.EndpointId, endpointId))
             {
                 _pendingUdp.TryRemove(new KeyValuePair<PortSlot, PendingBind>(slot, pending));
@@ -656,6 +663,13 @@ public sealed class DivertPipeline : IAsyncDisposable
     private void DecideUdpSocket(PortSlot slot, uint processId, ulong endpointId, bool dualStack)
     {
         _udpSeen[slot] = endpointId;
+
+        if (dualStack)
+        {
+            // An IPv6 wildcard socket also sends IPv4. Seen for both, so its IPv4 datagrams are not
+            // taken for an unknown socket's - held, looked up and dropped - when it records no row below.
+            _udpSeen.TryAdd(slot with { IPv6 = false }, endpointId);
+        }
 
         if (processId == _selfProcessId)
         {
@@ -734,7 +748,7 @@ public sealed class DivertPipeline : IAsyncDisposable
                 if (Images is { } images && udpFlow.Flow.ExecutablePath is { Length: > 0 } path)
                 {
                     var record = images.Refresh(path);
-                    pending = new PendingBind(udpFlow.Flow, record, udpFlow.Flow.Image?.PackageFamilyName, udpFlow.EndpointId, udpFlow.DualStack);
+                    pending = new PendingBind(udpFlow.Flow, record, udpFlow.Flow.Image?.PackageClaim, udpFlow.EndpointId, udpFlow.DualStack);
                     images.RequestVerification(record, decision.Needs);
                 }
             }
@@ -1588,7 +1602,15 @@ public sealed class DivertPipeline : IAsyncDisposable
         }
 
         DecideUdpSocket(found.DualStack ? slot with { IPv6 = true } : slot, found.ProcessId, endpointId: 0, found.DualStack);
-        return IsUdpSeen(slot);
+
+        if (IsUdpSeen(slot))
+        {
+            return true;
+        }
+
+        // Not expected; but whatever the reason, not looked up again for every datagram.
+        _udpUnknownOwner[slot] = now;
+        return false;
     }
 
     /// <summary>Waits briefly for a UDP socket's BIND to be recorded.</summary>

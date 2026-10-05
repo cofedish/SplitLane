@@ -143,6 +143,27 @@ public sealed class FailClosedClassificationSecurityTests
     }
 
     [Fact]
+    public async Task A_dual_stack_socket_of_an_unresolvable_owner_carries_IPv4_and_is_looked_up_once()
+    {
+        // System, a protected process or one that already exited: nothing to decide on, nothing selected.
+        // Its IPv4 datagrams through an IPv6 wildcard socket used to be dropped, each after a wait and two
+        // table lookups on the packet thread.
+        var lookups = 0;
+        await using var pipeline = Pipeline(
+            Protecting(), owners: (_, _) => { lookups++; return new UdpEndpointOwner(0x7FFFFFF0, DualStack: true); });
+
+        var datagram = TestPackets.Udp(App, Remote, [1]);
+        var address = new WinDivertAddress { Outbound = true };
+
+        for (var i = 0; i < 5; i++)
+        {
+            Assert.Equal(DivertPipeline.PacketAction.Forward, pipeline.Classify(datagram, ref address));
+        }
+
+        Assert.Equal(1, lookups);
+    }
+
+    [Fact]
     public async Task A_failed_owner_lookup_is_not_repeated_for_every_datagram()
     {
         var lookups = 0;
