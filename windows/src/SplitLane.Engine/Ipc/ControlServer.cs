@@ -6,6 +6,7 @@ using System.Text.Json;
 using SplitLane.Core.Configuration;
 using SplitLane.Core.Ipc;
 using SplitLane.Core.Logging;
+using SplitLane.Core.Models;
 using SplitLane.Engine.Runtime;
 
 namespace SplitLane.Engine.Ipc;
@@ -182,7 +183,7 @@ public sealed class ControlServer : IAsyncDisposable
             var request = JsonSerializer.Deserialize<EngineRequest>(payload, ConfigurationCodec.Options);
             response = request is null
                 ? EngineResponse.Failed("Empty request")
-                : await HandleAsync(request, cancellationToken).ConfigureAwait(false);
+                : await HandleAsync(request, Interop.ProcessSessions.OfClient(pipe), cancellationToken).ConfigureAwait(false);
         }
         catch (JsonException ex)
         {
@@ -204,7 +205,7 @@ public sealed class ControlServer : IAsyncDisposable
         await pipe.FlushAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task<EngineResponse> HandleAsync(EngineRequest request, CancellationToken cancellationToken)
+    private async Task<EngineResponse> HandleAsync(EngineRequest request, uint? callerSession, CancellationToken cancellationToken)
     {
         switch (request.Kind)
         {
@@ -212,9 +213,11 @@ public sealed class ControlServer : IAsyncDisposable
                 return new EngineResponse(EngineResponseKind.Status, Status: _runtime.Status());
 
             case EngineRequestKind.RequestActivity:
+                // The control channel is open to every interactive user; each sees the connections of
+                // their own session, not what other people on the machine are doing (SL-SEC-018).
                 return new EngineResponse(
                     EngineResponseKind.Activity,
-                    Activity: _runtime.Activity(Math.Clamp(request.Limit, 1, 1000)));
+                    Activity: ForSession(_runtime.Activity(Math.Clamp(request.Limit, 1, 1000)), callerSession));
 
             case EngineRequestKind.ReloadConfiguration:
                 // An out-of-order reload is discarded rather than applied. Requests are not ordered
@@ -312,6 +315,13 @@ public sealed class ControlServer : IAsyncDisposable
                 return EngineResponse.Failed($"Unsupported request {request.Kind}");
         }
     }
+
+    /// <summary>
+    /// The events a caller in a session may see: those of processes in the same session. An unknown
+    /// caller session, or an event whose session is unknown, shows nothing.
+    /// </summary>
+    internal static IReadOnlyList<ConnectionEvent> ForSession(IReadOnlyList<ConnectionEvent> events, uint? session) =>
+        session is { } caller ? [.. events.Where(e => e.SessionId == caller)] : [];
 
     /// <summary>Checks a credential before the service stores it. The message never names the password.</summary>
     internal static bool ProxyCredentialAcceptable(ProxyCredentialUpdate credential, out string refusal)

@@ -263,6 +263,7 @@ public sealed class RedirectListener : IAsyncDisposable
                 ExecutablePath = entry.ExecutablePath,
                 ApplicationName = entry.ApplicationName,
                 ProcessId = entry.ProcessId,
+                SessionId = Interop.ProcessSessions.Of(entry.ProcessId),
                 DestinationHost = entry.Hostname ?? entry.OriginalDestination.ToString(),
                 DestinationPort = entry.OriginalDestinationPort,
                 Protocol = FlowProtocol.Tcp,

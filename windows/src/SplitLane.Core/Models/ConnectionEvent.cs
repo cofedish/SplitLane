@@ -169,6 +169,12 @@ public sealed record ConnectionEvent
     /// <summary>Owning process id at decision time. Diagnostic.</summary>
     public uint ProcessId { get; init; }
 
+    /// <summary>
+    /// The Windows session the owning process ran in, when known. The activity list is shown to the user
+    /// of that session only (SL-SEC-018).
+    /// </summary>
+    public uint? SessionId { get; init; }
+
     /// <summary>Hostname when the DNS observer knew one, otherwise the IP literal.</summary>
     public required string DestinationHost { get; init; }
 

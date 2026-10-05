@@ -87,12 +87,77 @@ public static class SplitLaneLog
         Write(LogLevel.Error, category, $"{message} — {exception.GetType().Name}: {exception.Message}");
     }
 
+    /// <summary>Longest message written. Anything longer is cut, and says so.</summary>
+    public const int MaxMessageLength = 4096;
+
+    /// <summary>
+    /// Makes text safe to put on one log line (SL-SEC-018).
+    /// </summary>
+    /// <remarks>
+    /// Messages carry text from outside: a proxy's reason phrase, a hostname, a process path, a rule
+    /// name. A line break in any of them would start a forged record; an escape sequence would rewrite
+    /// what a console shows; a bidirectional override would make a name read as something else. Every
+    /// control character, line or paragraph separator and bidi control is written as <c>\uXXXX</c>.
+    /// Ordinary letters in any script are left alone.
+    /// </remarks>
+    public static string Sanitize(string? text, int maxLength = MaxMessageLength)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return string.Empty;
+        }
+
+        var clean = true;
+        foreach (var character in text)
+        {
+            if (NeedsEscape(character))
+            {
+                clean = false;
+                break;
+            }
+        }
+
+        if (clean && text.Length <= maxLength)
+        {
+            return text;
+        }
+
+        var builder = new System.Text.StringBuilder(Math.Min(text.Length, maxLength) + 16);
+        foreach (var character in text)
+        {
+            if (builder.Length >= maxLength)
+            {
+                builder.Append(" [truncated]");
+                break;
+            }
+
+            if (NeedsEscape(character))
+            {
+                builder.Append("\\u").Append(((int)character).ToString("X4", CultureInfo.InvariantCulture));
+            }
+            else
+            {
+                builder.Append(character);
+            }
+        }
+
+        return builder.ToString();
+    }
+
+    private static bool NeedsEscape(char character) =>
+        char.IsControl(character) ||
+        character is '\u2028' or '\u2029' or (>= '\u202A' and <= '\u202E') or (>= '\u2066' and <= '\u2069');
+
     private static void Write(LogLevel level, string category, string message)
     {
         if (level < MinimumLevel)
         {
             return;
         }
+
+        // At the boundary, once, so no sink and no call site can forget (SL-SEC-018).
+        category = Sanitize(category, 64);
+        message = Sanitize(message);
 
         ILogSink[] snapshot;
         lock (Gate)
