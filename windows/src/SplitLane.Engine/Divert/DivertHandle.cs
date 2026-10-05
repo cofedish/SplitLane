@@ -106,7 +106,7 @@ public sealed class DivertHandle : IDisposable
 
         if (handle == -1 || handle == nint.Zero)
         {
-            var error = Marshal.GetLastWin32Error();
+            var error = Marshal.GetLastPInvokeError();
             throw Translate(error, layer, filter);
         }
 
@@ -148,7 +148,7 @@ public sealed class DivertHandle : IDisposable
         {
             throw new DivertException(
                 DivertFailureKind.Unknown,
-                $"Could not set {param}: Win32 error {Marshal.GetLastWin32Error()}.");
+                $"Could not set {param}: Win32 error {Marshal.GetLastPInvokeError()}.");
         }
     }
 
@@ -214,7 +214,7 @@ public sealed class DivertHandle : IDisposable
 
         if (!ok)
         {
-            error = Marshal.GetLastWin32Error();
+            error = Marshal.GetLastPInvokeError();
             return false;
         }
 
@@ -249,7 +249,7 @@ public sealed class DivertHandle : IDisposable
 
         if (!ok)
         {
-            error = Marshal.GetLastWin32Error();
+            error = Marshal.GetLastPInvokeError();
         }
 
         return ok;
@@ -308,7 +308,7 @@ public sealed class DivertHandle : IDisposable
         // stays parked until a packet happens to arrive, the bounded join gives up on it, and the
         // process outlives its own shutdown - which is invisible until an installer tries to
         // replace the executable of a service it believes has stopped, and fails.
-        LastError = Marshal.GetLastWin32Error();
+        LastError = Marshal.GetLastPInvokeError();
         return false;
     }
 

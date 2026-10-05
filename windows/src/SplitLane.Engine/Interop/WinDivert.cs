@@ -304,32 +304,34 @@ internal static partial class WinDivertNative
                 ? handle
                 : nint.Zero);
 
-    [LibraryImport(Library, EntryPoint = "WinDivertOpen", StringMarshalling = StringMarshalling.Utf8)]
+    // The calls whose failures are reported carry SetLastError (SL-SEC-020): without it the "Win32 error"
+    // in a log line or an exception was whatever error some earlier call had left behind.
+    [LibraryImport(Library, EntryPoint = "WinDivertOpen", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
     internal static partial nint Open(string filter, WinDivertLayer layer, short priority, WinDivertFlags flags);
 
-    [LibraryImport(Library, EntryPoint = "WinDivertClose")]
+    [LibraryImport(Library, EntryPoint = "WinDivertClose", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool Close(nint handle);
 
-    [LibraryImport(Library, EntryPoint = "WinDivertShutdown")]
+    [LibraryImport(Library, EntryPoint = "WinDivertShutdown", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool Shutdown(nint handle, int how);
 
-    [LibraryImport(Library, EntryPoint = "WinDivertRecv")]
+    [LibraryImport(Library, EntryPoint = "WinDivertRecv", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static unsafe partial bool Recv(
         nint handle, byte* packet, uint packetLen, uint* recvLen, WinDivertAddress* address);
 
-    [LibraryImport(Library, EntryPoint = "WinDivertSend")]
+    [LibraryImport(Library, EntryPoint = "WinDivertSend", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static unsafe partial bool Send(
         nint handle, byte* packet, uint packetLen, uint* sendLen, WinDivertAddress* address);
 
-    [LibraryImport(Library, EntryPoint = "WinDivertSetParam")]
+    [LibraryImport(Library, EntryPoint = "WinDivertSetParam", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool SetParam(nint handle, WinDivertParam param, ulong value);
 
-    [LibraryImport(Library, EntryPoint = "WinDivertGetParam")]
+    [LibraryImport(Library, EntryPoint = "WinDivertGetParam", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static unsafe partial bool GetParam(nint handle, WinDivertParam param, ulong* value);
 
