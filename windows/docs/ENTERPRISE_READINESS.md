@@ -28,8 +28,8 @@ Decisions by the owner (2026-09-23) that shape the plan below:
 | DNS | Not proxied when resolved through the Windows DNS Client; answers are sniffed to send hostnames to the proxy (`ATYP=DOMAIN`). An application's own DoH or UDP/53 is proxied like the rest of its traffic. | Accepted. Names are visible to the local resolver; blocked or intranet-only names fail. When that matters: `NETWORKING.md` §7. |
 | UDP / QUIC | Relayed through SOCKS5 UDP ASSOCIATE by default (ADR W-0012); dropped - never sent DIRECT - when the proxy refuses, the 64-lane pool is full, or the datagram is IPv6. | IPv6 UDP of selected apps always fails. P2 |
 | Rule delivery and revocation | **New:** an administrator-owned policy file with identity rules users cannot override, revoked by removal (W-0014). The user file is still writable by every interactive user, and there is no registry/ADMX source. | Policy exists; delivery tooling and UI do not. P0 → partly done |
-| Admin rights | Engine is a LocalSystem service; app is unelevated. The pipe (11 closed request kinds) lets any interactive user apply a configuration, stop routing (**now refused under `forceRoutingEnabled`**), and install a signed update (**now refused under `disableSelfUpdate`**). | Remaining: `ApplyConfiguration` is still open to any user for their own rules. P1 |
-| Credential | Proxy password is a DPAPI LocalMachine blob in the user-writable folder; any local process that can read the file can decrypt it. | P1 |
+| Admin rights | Engine is a LocalSystem service; app is unelevated. The pipe (13 closed request kinds, server authenticated by the window) lets any interactive user apply a configuration, stop routing (**now refused under `forceRoutingEnabled`**), and install a signed update (**now refused under `disableSelfUpdate`**). | Remaining: `ApplyConfiguration` is still open to any user for their own rules. P1 |
+| Credential | **Done (SL-SEC-006):** held by the service in a SYSTEM/Administrators-only directory, bound to the proxy and account it was entered for; the old readable `credential.bin` is migrated and deleted. | - |
 | Logs | `%ProgramData%\SplitLane\logs\engine.log`, 4 MB plus one rollover. No Event Log, no ETW. Identity decisions are now logged once per file version with signer, rule and outcome; activity (500 entries) is memory-only. | No central collection, no durable audit. P1 |
 | Health | No telemetry of its own. The engine log (`%ProgramData%\SplitLane\logs\engine.log`) records routing faults, restarts, policy load/refusal and identity decisions; `--explain` answers "why is this app not routed" locally. | Collected by the organisation's existing tooling. Not a SplitLane blocker. |
 | Agent update / rollback | Signed manifest + hashed MSI via msiexec as SYSTEM, user-triggered; downgrade blocked by the MSI. **New:** schema 2 configuration is written beside the schema 1 file, so a rollback still finds a readable file. Policy can turn self-update off. | IT cannot pin versions except by turning self-update off. P1 |
@@ -50,9 +50,9 @@ removing a rule from the policy revokes it within 5 s.
 install on a clean VM that checks the recovery actions (`sc qfailure SplitLane`) and kills the engine.
 Acceptance: the script reports PASS for update and move; the service restarts within 10 s of a kill.
 
-**3. Lock down state (P1).** Configuration read-only for users once a policy disallows user rules;
-`credential.bin` readable by SYSTEM only.
-Acceptance: an unelevated user cannot read `credential.bin`, or write the configuration when policy says so.
+**3. Lock down state (P1).** Configuration read-only for users once a policy disallows user rules.
+The credential half is done (SL-SEC-006): the password is no longer readable by users.
+Acceptance: an unelevated user cannot write the configuration when policy says so.
 
 **4. Durable decision audit (P1).** Rotating JSONL of proxied, blocked and identity-mismatch decisions
 with rule and process identity, for the organisation's collectors to pick up.

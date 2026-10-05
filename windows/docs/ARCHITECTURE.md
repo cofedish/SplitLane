@@ -228,7 +228,7 @@ more specific.
         │                                          │
         │   \\.\pipe\SplitLane.Engine.Control      │
         │   length-prefixed JSON                   │
-        │   EngineRequestKind — eleven members     │
+        │   EngineRequestKind — thirteen members   │
         └──────────────────────────────────────────┘
 ```
 

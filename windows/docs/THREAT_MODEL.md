@@ -161,15 +161,21 @@ the rewrite, use an index that admits one redirected connection per slot; a seco
 **Severity: designed for.**
 
 The engine runs as LocalSystem; the app does not. Everything the app can make the engine do is
-`EngineRequestKind`, a closed enum with eleven members. There is deliberately no message that names a
-file to open, a command to run, or a library to load; the two update requests carry nothing at all
-(W-12).
+`EngineRequestKind`, a closed enum with thirteen members. There is deliberately no message that names
+a file to open, a command to run, or a library to load; the two update requests carry nothing at all
+(W-12), and the credential request carries a password the service stores only in its own directory
+(SL-SEC-006).
 
 - The pipe's ACL grants the interactive user read and write, Administrators and LocalSystem full
   control, and nobody else. Without an explicit ACL a pipe created by a service is reachable by every
   account on the machine.
 - Message length is bounded *before* a byte is allocated. A length prefix an unprivileged caller
   controls is an allocation an unprivileged caller controls.
+- The window authenticates the server (SL-SEC-010): it connects at the Identification impersonation
+  level and sends nothing until the pipe's owner is proved to be LocalSystem or Administrators. The
+  engine creates its first instance with `FirstPipeInstance` and keeps a listening instance at all
+  times, so the name is never free while it runs.
+- Activity is returned to a caller only for processes of the caller's own session (SL-SEC-018).
 - The configuration the app can hand over is validated by the same `ConfigurationValidator` the
   engine uses for its own file, so an app-supplied rule cannot bypass the family-matching guard.
 

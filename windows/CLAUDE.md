@@ -77,9 +77,36 @@ and the packet path is a NAT-table lookup keyed on the source port. See `docs/NE
   family rule on `C:\Windows\System32` would proxy the operating system (ADR W-0003). The check
   appears in three places on purpose; do not remove any of them.
 - The **engine is the only elevated component**, and runs as `LocalSystem`. Everything the app can
-  ask it to do is `EngineRequestKind`, eleven members, none of which names a file, a command or a
+  ask it to do is `EngineRequestKind`, thirteen members, none of which names a file, a command or a
   library. The control channel's ACL was built for this: LocalSystem full control, interactive user
-  read and write, so neither side gains anything from the other.
+  read and write. **The window authenticates the server end too** (SL-SEC-010): it connects at the
+  Identification level and talks only to a pipe owned by SYSTEM or Administrators
+  (`src/Shared/Ipc/EngineServerIdentity.cs`); the engine claims the name with `FirstPipeInstance` and
+  never lets it go free while it runs. Activity is returned only for the caller's session.
+- **Nothing the service writes lives directly in `%ProgramData%\SplitLane`**, which every user may
+  create files and folders in (SL-SEC-001/006/007). Logs, updates, `Secrets` and `Policy` are
+  directories the service created with its own permissions (`ProtectedDirectory`: inheritance cut,
+  never a link, moved aside - never repaired - when untrusted). The configuration document is the one
+  shared file, and both sides write it under a fresh random name with `CreateNew`.
+- **The proxy password belongs to the service** (SL-SEC-006). The window sends it with
+  `SetProxyCredential` and keeps no copy; the service stores it in `Secrets`, bound to the protocol,
+  host, port and account it was entered for, and never uses it for anything else. HTTP Basic to a
+  proxy elsewhere needs the user's explicit opt-in, stored with the password; Basic after NTLM or
+  Negotiate has worked is refused as a downgrade (SL-SEC-011).
+- **An update package is installed only from the service's protected staging directory**, after a
+  second check on a fresh handle: same file, one name, trusted owner and ACL, signed hash
+  (`UpdateStaging`, SL-SEC-001). `msiexec`, `explorer` and WinDivert are reached by absolute path
+  (SL-SEC-015).
+- **Routing state is keyed on the socket, not the port number** (SL-SEC-005): TCP on family, local
+  address and port; UDP on family and port; every row remembers its WinDivert endpoint id and only
+  that socket's CLOSE removes it. Proxy NAT entries expire after five minutes **without traffic**,
+  not after creation (SL-SEC-004), and a gone redirected entry leaves a refusal tombstone.
+- **Undecided traffic is not DIRECT while any rule is in force** (SL-SEC-009): an undecided SYN is
+  dropped and retransmitted; an unseen UDP socket's owner is looked up by port (which also covers
+  sockets opened before the engine started); a late Proxy decision terminates the connection.
+- **A DNS answer is evidence only if it answers a query the engine saw leave** (SL-SEC-003).
+- Security regression tests live in `tests/SplitLane.Engine.Tests/Security/` and carry
+  `[Trait("Category", "Security")]`: `dotnet test SplitLane.Windows.slnx --filter Category=Security`.
 - The **driver is in the package, and so is its licence** (ADR W-0009). `build-installer.ps1`
   fetches it against a pinned SHA-256 and refuses to produce a package without
   `WinDivert-LICENSE.txt` beside the binaries. WinDivert is LGPLv3 or GPLv2, redistributed
