@@ -172,6 +172,14 @@ public static class ConfigurationValidator
                 $"Handshake timeout {proxy.HandshakeTimeoutMilliseconds}ms must be greater than zero");
         }
 
+        if (proxy.HandshakeTimeoutMilliseconds > MaxHandshakeTimeoutMilliseconds)
+        {
+            throw new ConfigurationValidationException(
+                ConfigurationValidationCode.NonPositiveTimeout,
+                $"Handshake timeout {proxy.HandshakeTimeoutMilliseconds / 1000}s is longer than the " +
+                $"{MaxHandshakeTimeoutMilliseconds / 1000}s allowed");
+        }
+
         if (proxy.Credential is { } credential && string.IsNullOrWhiteSpace(credential.Username))
         {
             throw new ConfigurationValidationException(
@@ -179,6 +187,13 @@ public static class ConfigurationValidator
                 "Proxy authentication is enabled but the username is empty");
         }
     }
+
+    /// <summary>
+    /// The longest a proxy handshake may take (SL-SEC-017). Two minutes is twelve times the default and
+    /// far beyond any proxy that answers; with no limit, a value near int.MaxValue and a proxy that never
+    /// answered held every relayed connection's sockets for weeks.
+    /// </summary>
+    public const int MaxHandshakeTimeoutMilliseconds = 120_000;
 
     /// <summary>
     /// Returns a configuration with anything unsafe corrected rather than rejected.
@@ -192,6 +207,16 @@ public static class ConfigurationValidator
     public static RuntimeConfiguration Sanitize(RuntimeConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
+
+        // A document written before the limit existed is brought within it rather than refused: a
+        // refused document is a machine with no rules at all.
+        if (configuration.Proxy.HandshakeTimeoutMilliseconds > MaxHandshakeTimeoutMilliseconds)
+        {
+            configuration = configuration with
+            {
+                Proxy = configuration.Proxy with { HandshakeTimeoutMilliseconds = MaxHandshakeTimeoutMilliseconds },
+            };
+        }
         // Never silently discard an invalid strict policy on load.
         ValidateDomainRules(configuration);
 

@@ -97,8 +97,10 @@ public sealed class UdpLanePool : IDisposable
     /// Hands a socket back.
     /// </summary>
     /// <remarks>
-    /// The socket is replaced rather than reused. Datagrams for the previous conversation may still
-    /// be in flight, and a lane that inherited them would hand one application another's traffic.
+    /// The socket stays bound and is emptied when it is next handed out (<see cref="TryAcquire"/>), so
+    /// a lane never inherits the previous conversation's datagrams. It used to be closed and bound
+    /// again here, and between the two any local process could take the port - one slot lost for
+    /// good per attempt, and selected applications' UDP refused once all were gone (SL-SEC-017).
     /// </remarks>
     public void Release(ushort port)
     {
@@ -116,8 +118,6 @@ public sealed class UdpLanePool : IDisposable
                 return;
             }
 
-            _sockets[index]?.Dispose();
-            _sockets[index] = TryBind(port);
             _taken[index] = false;
         }
     }

@@ -53,18 +53,22 @@ public static class TcpRelay
             received = (ulong)upstreamPreamble.Length;
         }
 
-        var toUpstream = PumpAsync(application, upstream, linked.Token);
-        var toApplication = PumpAsync(upstream, application, linked.Token);
+        // A reset or failure in either direction ends both (SL-SEC-017). An orderly half-close does not:
+        // the other direction keeps running until it, too, is done.
+        var toUpstream = PumpAsync(application, upstream, linked);
+        var toApplication = PumpAsync(upstream, application, linked);
 
         var results = await Task.WhenAll(toUpstream, toApplication).ConfigureAwait(false);
 
         return new RelayResult(results[0], results[1] + received);
     }
 
-    private static async Task<ulong> PumpAsync(Socket from, Socket to, CancellationToken cancellationToken)
+    private static async Task<ulong> PumpAsync(Socket from, Socket to, CancellationTokenSource both)
     {
+        var cancellationToken = both.Token;
         var buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(BufferSize);
         ulong total = 0;
+        var aborted = false;
 
         try
         {
@@ -78,12 +82,14 @@ public static class TcpRelay
                 }
                 catch (SocketException)
                 {
-                    // A reset is a normal way for a connection to end. It is not an error worth
-                    // propagating out of the relay: the caller already knows the connection is over.
+                    // A reset is a normal way for a connection to end, and it ends the other direction
+                    // too: left running, it would hold both sockets until the far side gave up.
+                    aborted = true;
                     break;
                 }
                 catch (ObjectDisposedException)
                 {
+                    aborted = true;
                     break;
                 }
 
@@ -95,7 +101,12 @@ public static class TcpRelay
                     break;
                 }
 
-                await SendAllAsync(to, buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
+                if (!await SendAllAsync(to, buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false))
+                {
+                    aborted = true;
+                    break;
+                }
+
                 total += (ulong)read;
             }
         }
@@ -104,19 +115,41 @@ public static class TcpRelay
         }
         catch (SocketException)
         {
+            aborted = true;
         }
         catch (ObjectDisposedException)
         {
+            aborted = true;
         }
         finally
         {
             System.Buffers.ArrayPool<byte>.Shared.Return(buffer);
         }
 
+        if (aborted)
+        {
+            await both.CancelAsync().ConfigureAwait(false);
+            Abort(to);
+        }
+
         return total;
     }
 
-    private static async Task SendAllAsync(Socket socket, ReadOnlyMemory<byte> data, CancellationToken cancellationToken)
+    /// <summary>Resets a socket, so the far end learns at once that the relay is gone.</summary>
+    private static void Abort(Socket socket)
+    {
+        try
+        {
+            socket.LingerState = new LingerOption(true, 0);
+            socket.Close();
+        }
+        catch (Exception ex) when (ex is SocketException or ObjectDisposedException)
+        {
+        }
+    }
+
+    /// <summary>Sends everything, or reports that it could not.</summary>
+    private static async Task<bool> SendAllAsync(Socket socket, ReadOnlyMemory<byte> data, CancellationToken cancellationToken)
     {
         var sent = 0;
         while (sent < data.Length)
@@ -126,11 +159,15 @@ public static class TcpRelay
 
             if (written == 0)
             {
-                return;
+                // Nothing taken is a connection that can carry nothing more; silently returning used
+                // to drop the rest of the data and carry on as though it had been delivered.
+                return false;
             }
 
             sent += written;
         }
+
+        return true;
     }
 
     private static void TryShutdownSend(Socket socket)

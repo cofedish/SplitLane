@@ -57,6 +57,19 @@ public sealed class RedirectListener : IAsyncDisposable
 
     private const string LogCategory = "redirect";
 
+    private int _active;
+    private long _overflows;
+
+    /// <summary>
+    /// The most connections relayed at once (SL-SEC-017). Only selected applications' connections get
+    /// this far, so the bound protects the service from one of them, not from strangers: a connection
+    /// over it is refused, which that application sees as a failed connect - never DIRECT.
+    /// </summary>
+    public int MaxConcurrentConnections { get; init; } = 4096;
+
+    /// <summary>Connections being relayed now. Diagnostic.</summary>
+    public int ActiveConnections => Volatile.Read(ref _active);
+
     /// <summary>The port the listener actually bound.</summary>
     public ushort Port { get; private set; }
 
@@ -189,9 +202,31 @@ public sealed class RedirectListener : IAsyncDisposable
                 continue;
             }
 
+            if (Interlocked.Increment(ref _active) > MaxConcurrentConnections)
+            {
+                Interlocked.Decrement(ref _active);
+                client.Dispose();
+                if (Interlocked.Increment(ref _overflows) is 1 or 100 or 10_000)
+                {
+                    SplitLaneLog.Warning(LogCategory, $"refused a connection: {MaxConcurrentConnections} are already being relayed");
+                }
+
+                continue;
+            }
+
             // Each connection runs detached. One slow upstream handshake must not delay the next
             // application's connection.
-            _ = Task.Run(() => HandleAsync(client, cancellationToken), CancellationToken.None);
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await HandleAsync(client, cancellationToken).ConfigureAwait(false);
+                }
+                finally
+                {
+                    Interlocked.Decrement(ref _active);
+                }
+            }, CancellationToken.None);
         }
     }
 

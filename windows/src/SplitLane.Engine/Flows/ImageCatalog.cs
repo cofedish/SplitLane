@@ -82,14 +82,38 @@ public sealed class ImageCatalog : IAsyncDisposable
     private const string LogCategory = "identity";
 
     private readonly ConcurrentDictionary<string, ImageRecord> _records = new(ExecutablePath.Comparer);
-    private readonly Channel<ImageRecord> _queue = Channel.CreateUnbounded<ImageRecord>(
-        new UnboundedChannelOptions { SingleWriter = false, SingleReader = false });
+    private readonly ConcurrentQueue<string> _insertionOrder = new();
+
+    /// <summary>
+    /// Verifications waiting, bounded (SL-SEC-017). Each is a whole-file hash and signature check as
+    /// SYSTEM, and anyone can start processes whose names claim a rule. A request that does not fit is
+    /// not queued; its flows stay held - never decided on the claim - and ask again on their next
+    /// connection attempt.
+    /// </summary>
+    private readonly Channel<ImageRecord> _queue = Channel.CreateBounded<ImageRecord>(
+        new BoundedChannelOptions(QueueCapacity) { SingleWriter = false, SingleReader = false, FullMode = BoundedChannelFullMode.Wait });
+
+    /// <summary>How many verifications may wait.</summary>
+    internal const int QueueCapacity = 1024;
     private readonly CancellationTokenSource _stopping = new();
     private readonly Task[] _workers;
     private readonly int _maxEntries;
     private readonly Func<string, bool, (ImageEvidence? Evidence, FileStamp Stamp)> _inspect;
     private readonly Func<string, FileStamp> _stamp;
     private long _verifications;
+    private long _overflows;
+
+    /// <summary>Removes up to <paramref name="count"/> of the oldest entries.</summary>
+    internal static void Evict<TValue>(ConcurrentDictionary<string, TValue> entries, ConcurrentQueue<string> order, int count)
+    {
+        for (var removed = 0; removed < count && order.TryDequeue(out var key);)
+        {
+            if (entries.TryRemove(key, out _))
+            {
+                removed++;
+            }
+        }
+    }
 
     /// <summary>Builds a catalog that inspects real files.</summary>
     public ImageCatalog(int workers = 2, int maxEntries = 4096)
@@ -160,13 +184,15 @@ public sealed class ImageCatalog : IAsyncDisposable
 
         if (_records.Count >= _maxEntries)
         {
-            // As in ProcessResolver: a wholesale clear rather than an LRU. Rebuilding costs a stamp per
-            // live image, and verified answers are re-earned only for files that claim a rule.
-            _records.Clear();
+            // The oldest eighth goes, in the order records were made. A wholesale clear used to let
+            // anyone cycle enough file names to wipe every verified answer at once, putting a genuine
+            // selected application back behind a queue of verifications (SL-SEC-017).
+            Evict(_records, _insertionOrder, Math.Max(1, _maxEntries / 8));
         }
 
         var record = new ImageRecord(path, stamp);
         _records[path] = record;
+        _insertionOrder.Enqueue(path);
         return record;
     }
 
@@ -208,9 +234,14 @@ public sealed class ImageCatalog : IAsyncDisposable
             return;
         }
 
-        if (record.Request(needs))
+        if (record.Request(needs) && !_queue.Writer.TryWrite(record))
         {
-            _queue.Writer.TryWrite(record);
+            // Full. Released, so that the next request for this file queues it again.
+            record.Take();
+            if (Interlocked.Increment(ref _overflows) is 1 or 100 or 10_000)
+            {
+                SplitLaneLog.Warning(LogCategory, $"verification queue is full ({QueueCapacity}); held connections will retry");
+            }
         }
     }
 

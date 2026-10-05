@@ -50,6 +50,7 @@ public readonly record struct ProcessInfo(
 public sealed class ProcessResolver
 {
     private readonly ConcurrentDictionary<uint, ProcessInfo> _cache = new();
+    private readonly ConcurrentQueue<uint> _insertionOrder = new();
     private readonly int _maxEntries;
     private readonly ImageCatalog? _images;
 
@@ -103,19 +104,29 @@ public sealed class ProcessResolver
 
         if (_cache.Count >= _maxEntries)
         {
-            // A plain clear rather than an LRU eviction. The cache exists to absorb bursts of
-            // connections from the same handful of processes, and rebuilding it costs one syscall
-            // per live process; carrying an LRU's bookkeeping on the hot path to avoid that would be
-            // the more expensive choice.
-            _cache.Clear();
+            // The oldest eighth, in insertion order: cheap, and unlike a wholesale clear it cannot be
+            // used to throw away every process's answer at once (SL-SEC-017).
+            var target = Math.Max(1, _maxEntries / 8);
+            for (var removed = 0; removed < target && _insertionOrder.TryDequeue(out var oldest);)
+            {
+                if (_cache.TryRemove(oldest, out _))
+                {
+                    removed++;
+                }
+            }
         }
 
         _cache[processId] = info;
+        _insertionOrder.Enqueue(processId);
         return info;
     }
 
     /// <summary>Drops the cache. Used when routing stops.</summary>
-    public void Clear() => _cache.Clear();
+    public void Clear()
+    {
+        _cache.Clear();
+        _insertionOrder.Clear();
+    }
 
     /// <summary>Reads the full image path of a process, or an empty string when it cannot be read.</summary>
     public static string QueryImagePath(uint processId)
