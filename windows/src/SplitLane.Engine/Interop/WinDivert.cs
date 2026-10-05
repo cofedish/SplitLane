@@ -285,6 +285,25 @@ internal static partial class WinDivertNative
 {
     private const string Library = "WinDivert.dll";
 
+    /// <summary>
+    /// The only place WinDivert.dll is loaded from: beside the engine, by absolute path (SL-SEC-015).
+    /// </summary>
+    /// <remarks>
+    /// Loaded by name, a missing copy beside the engine sent the search on through System32, the Windows
+    /// directory, the current directory and the machine's PATH - any writable entry of which would
+    /// have been a DLL loaded into a LocalSystem process. The engine's directory is under Program Files.
+    /// </remarks>
+    internal static string LibraryPath => Path.Combine(AppContext.BaseDirectory, Library);
+
+    /// <summary>Routes every import of <see cref="Library"/> to <see cref="LibraryPath"/>, and nowhere else.</summary>
+    [System.Runtime.CompilerServices.ModuleInitializer]
+    internal static void RegisterResolver() =>
+        NativeLibrary.SetDllImportResolver(typeof(WinDivertNative).Assembly, (name, _, _) =>
+            string.Equals(name, Library, StringComparison.OrdinalIgnoreCase) &&
+            NativeLibrary.TryLoad(LibraryPath, out var handle)
+                ? handle
+                : nint.Zero);
+
     [LibraryImport(Library, EntryPoint = "WinDivertOpen", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial nint Open(string filter, WinDivertLayer layer, short priority, WinDivertFlags flags);
 

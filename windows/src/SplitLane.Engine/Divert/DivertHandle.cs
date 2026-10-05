@@ -336,7 +336,7 @@ public sealed class DivertHandle : IDisposable
     {
         try
         {
-            return NativeLibrary.TryLoad("WinDivert.dll", out var library) && Free(library);
+            return NativeLibrary.TryLoad(WinDivertNative.LibraryPath, out var library) && Free(library);
         }
         catch (DllNotFoundException)
         {

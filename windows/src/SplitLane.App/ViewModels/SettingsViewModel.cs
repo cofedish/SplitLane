@@ -315,7 +315,9 @@ public sealed class SettingsViewModel : ObservableObject
         try
         {
             var target = File.Exists(path) ? $"/select,\"{path}\"" : $"\"{Path.GetDirectoryName(path)}\"";
-            Process.Start(new ProcessStartInfo("explorer.exe", target) { UseShellExecute = true });
+            // By absolute path, not resolved through the search path (SL-SEC-015).
+            var explorer = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "explorer.exe");
+            Process.Start(new ProcessStartInfo(explorer, target) { UseShellExecute = true });
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
         {
