@@ -18,17 +18,17 @@
     so a rebuild picks them up automatically.
 
 .PARAMETER Sha256
-    Expected SHA-256 of the archive.
+    Expected SHA-256 of the archive. Defaults to the value recorded for the pinned version; change it
+    only together with -Version, after checking the new value against the WinDivert release.
 
-    There is deliberately no default. A hash baked into this file would be a hash nobody checked —
-    it would be copied from whatever the script author happened to download, and it would look
-    exactly as authoritative when it was wrong as when it was right. The script prints the hash of
-    what it fetched; compare that against the WinDivert release page yourself, once, and pass it back
-    on subsequent runs so that later downloads are actually verified against something you checked.
+.PARAMETER AllowUnverified
+    Fetch without checking the archive's hash (an empty -Sha256 alone is refused - SL-SEC-024). For
+    evaluating a new WinDivert version by hand only: what this downloads is handed to a kernel, and
+    a package built from an unverified archive is a package nobody can vouch for.
 
 .EXAMPLE
     .\fetch-windivert.ps1
-    Downloads WinDivert 2.2.2 and prints its SHA-256 for you to verify.
+    Downloads the pinned WinDivert release and refuses it unless its SHA-256 matches.
 
 .EXAMPLE
     .\fetch-windivert.ps1 -Sha256 <hash you verified>
@@ -49,7 +49,10 @@ param(
     #
     # Recorded from the published 2.2.2 archive, 405137 bytes. Change it only together with
     # -Version, and only after checking the new value against the WinDivert release.
-    [string]$Sha256 = '63CB41763BB4B20F600B6DE04E991A9C2BE73279E317D4D82F237B150C5F3F15'
+    [string]$Sha256 = '63CB41763BB4B20F600B6DE04E991A9C2BE73279E317D4D82F237B150C5F3F15',
+
+    # Verification can be skipped only by asking for it by name (SL-SEC-024).
+    [switch]$AllowUnverified
 )
 
 # Where the driver belongs depends on which layout this script is sitting in.
@@ -71,6 +74,10 @@ if (-not $Destination) {
 }
 
 $ErrorActionPreference = 'Stop'
+
+if (-not $Sha256 -and -not $AllowUnverified) {
+    throw 'No expected SHA-256 was given. Pass -Sha256 <hash you verified>, or -AllowUnverified to fetch without checking (never for a package).'
+}
 
 $archiveName = "WinDivert-$Version-A.zip"
 $url = "https://github.com/basil00/WinDivert/releases/download/v$Version/$archiveName"

@@ -143,20 +143,27 @@ public static class ManifestVerifier
         }
     }
 
+    /// <summary>Where this project's release assets are published. Nothing else is fetched.</summary>
+    public const string ReleasePathPrefix = "/cofedish/SplitLane/releases/download/";
+
     /// <summary>
     /// Whether the installer URL is one this build is willing to fetch.
     /// </summary>
     /// <remarks>
-    /// HTTPS only, and only from where releases are published. The URL comes out of a signed
-    /// document, so this is a second line rather than the first - but a signing key that ever leaks
-    /// should not also be a way to point the engine at an arbitrary host.
+    /// HTTPS, github.com itself on the default port, no user information, and under this repository's
+    /// release downloads (SL-SEC-024). The URL comes out of a signed document, so this is a second line
+    /// rather than the first - but a signing key that ever leaks should not also be a way to point the
+    /// engine at another repository, another GitHub host, or an arbitrary one. GitHub's redirect to its
+    /// asset storage is followed by the client; the hash still has to match.
     /// </remarks>
-    private static bool IsAcceptableUrl(string? url) =>
+    internal static bool IsAcceptableUrl(string? url) =>
         Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
         uri.Scheme == Uri.UriSchemeHttps &&
-        (uri.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase) ||
-         uri.Host.EndsWith(".github.com", StringComparison.OrdinalIgnoreCase) ||
-         uri.Host.Equals("objects.githubusercontent.com", StringComparison.OrdinalIgnoreCase));
+        uri.IsDefaultPort &&
+        string.IsNullOrEmpty(uri.UserInfo) &&
+        uri.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase) &&
+        uri.AbsolutePath.StartsWith(ReleasePathPrefix, StringComparison.Ordinal) &&
+        !uri.AbsolutePath.Contains("/../", StringComparison.Ordinal);
 
     private static bool IsSha256(string? hex)
     {
