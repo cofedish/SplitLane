@@ -167,18 +167,36 @@ public sealed class ConfigurationStore
                 Directory.CreateDirectory(directory);
             }
 
-            var temporary = ConfigurationPath + ".tmp";
-            File.WriteAllText(temporary, ConfigurationCodec.EncodeToJson(configuration), Encoding.UTF8);
+            // A fresh, unpredictable name, created exclusively. The folder lets every user create
+            // files, and a fixed ".tmp" name was one a user could create first and keep control of
+            // while the service wrote through it (SL-SEC-007).
+            var temporary = $"{ConfigurationPath}.{Guid.NewGuid():N}.tmp";
 
-            // Replace rather than delete-then-move: the file is never absent at any instant, so a
-            // reader racing the write sees either the old document or the new one.
-            if (File.Exists(ConfigurationPath))
+            try
             {
-                File.Replace(temporary, ConfigurationPath, null, ignoreMetadataErrors: true);
+                using (var file = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                using (var writer = new StreamWriter(file, Encoding.UTF8))
+                {
+                    writer.Write(ConfigurationCodec.EncodeToJson(configuration));
+                }
+
+                // Replace rather than delete-then-move: the file is never absent at any instant, so a
+                // reader racing the write sees either the old document or the new one.
+                if (File.Exists(ConfigurationPath))
+                {
+                    File.Replace(temporary, ConfigurationPath, null, ignoreMetadataErrors: true);
+                }
+                else
+                {
+                    File.Move(temporary, ConfigurationPath);
+                }
             }
-            else
+            finally
             {
-                File.Move(temporary, ConfigurationPath);
+                if (File.Exists(temporary))
+                {
+                    File.Delete(temporary);
+                }
             }
         }
     }

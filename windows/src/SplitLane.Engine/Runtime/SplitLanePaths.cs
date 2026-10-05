@@ -64,16 +64,57 @@ public static class SplitLanePaths
     /// </summary>
     public static string SecretsDirectory => Path.Combine(Root, "Secrets");
 
+    /// <summary>
+    /// The engine's logs: a <see cref="ProtectedDirectory"/> users may read but not write, so the
+    /// service's rotation and appends cannot be steered at anything a user prepared (SL-SEC-007).
+    /// </summary>
+    public static string LogsDirectory => Path.Combine(Root, "logs");
+
     /// <summary>Engine log.</summary>
-    public static string EngineLog => Path.Combine(Root, "logs", "engine.log");
+    public static string EngineLog => Path.Combine(LogsDirectory, "engine.log");
 
     /// <summary>App log.</summary>
     public static string AppLog => Path.Combine(Root, "logs", "app.log");
 
-    /// <summary>Creates the directory tree if it is not already there.</summary>
-    public static void EnsureCreated()
+    /// <summary>
+    /// Creates the state directory, makes sure an administrator owns it, and makes the log directory
+    /// writable by the service only.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Every user may create files and folders in <see cref="Root"/>, because the window writes the
+    /// user's configuration there. So nothing the service writes lives directly in it: logs, updates,
+    /// secrets and the policy each have a directory the service created with its own permissions
+    /// (SL-SEC-007). The configuration document is the one shared file, and the service writes it under
+    /// a fresh random name before moving it into place.
+    /// </para>
+    /// <para>
+    /// The root is re-owned first, so that a user who created it before the service ever ran cannot
+    /// rename or re-permission it - which would undo every protected directory inside it.
+    /// </para>
+    /// </remarks>
+    /// <returns>Null when the log directory is protected; otherwise why not, and no file log is kept.</returns>
+    public static string? EnsureCreated()
     {
         Directory.CreateDirectory(Root);
-        Directory.CreateDirectory(Path.Combine(Root, "logs"));
+
+        try
+        {
+            PolicyStore.SecureRoot(Root);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            // An engine run by hand without elevation cannot change the root, and does not need to.
+        }
+
+        try
+        {
+            new ProtectedDirectory(LogsDirectory, UserAccess.Read).Ensure();
+            return null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            return ex.Message;
+        }
     }
 }

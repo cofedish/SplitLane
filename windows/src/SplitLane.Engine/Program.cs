@@ -28,9 +28,15 @@ internal static class Program
         var options = ParseOptions(args);
         var asService = args.Contains("--service", StringComparer.OrdinalIgnoreCase);
 
-        SplitLanePaths.EnsureCreated();
+        var logsProblem = SplitLanePaths.EnsureCreated();
         SplitLaneLog.MinimumLevel = options.Verbose ? LogLevel.Debug : LogLevel.Info;
-        SplitLaneLog.AddSink(new RollingFileLogSink(SplitLanePaths.EngineLog));
+
+        // Only into a directory the service controls: rotation deletes and renames files by name, and
+        // in a directory users can write that is a name a user could have prepared (SL-SEC-007).
+        if (logsProblem is null)
+        {
+            SplitLaneLog.AddSink(new RollingFileLogSink(SplitLanePaths.EngineLog));
+        }
 
         // Console output is opt-out, because it can hang the whole engine. In a console window with
         // QuickEdit enabled - the Windows default - a stray click puts the window into selection
@@ -44,6 +50,11 @@ internal static class Program
         if (!asService && !args.Contains("--no-console-log", StringComparer.OrdinalIgnoreCase))
         {
             SplitLaneLog.AddSink(new ConsoleLogSink());
+        }
+
+        if (logsProblem is not null)
+        {
+            SplitLaneLog.Warning(LogCategory, $"no log file is kept: the log directory is not safe for the service ({logsProblem})");
         }
 
         if (args.Contains("--check", StringComparer.OrdinalIgnoreCase))

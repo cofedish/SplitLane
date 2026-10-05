@@ -152,19 +152,35 @@ public sealed class ConfigurationService
 
         lock (_gate)
         {
+            // The logs directory is the service's (SL-SEC-007); the window creates only the root.
             Directory.CreateDirectory(Root);
-            Directory.CreateDirectory(Path.Combine(Root, "logs"));
 
-            var temporary = ConfigurationPath + ".tmp";
-            File.WriteAllText(temporary, ConfigurationCodec.EncodeToJson(next), Encoding.UTF8);
+            // A fresh name created exclusively, as the service does: nobody can prepare it in advance.
+            var temporary = $"{ConfigurationPath}.{Guid.NewGuid():N}.tmp";
 
-            if (File.Exists(ConfigurationPath))
+            try
             {
-                File.Replace(temporary, ConfigurationPath, null, ignoreMetadataErrors: true);
+                using (var file = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                using (var writer = new StreamWriter(file, Encoding.UTF8))
+                {
+                    writer.Write(ConfigurationCodec.EncodeToJson(next));
+                }
+
+                if (File.Exists(ConfigurationPath))
+                {
+                    File.Replace(temporary, ConfigurationPath, null, ignoreMetadataErrors: true);
+                }
+                else
+                {
+                    File.Move(temporary, ConfigurationPath);
+                }
             }
-            else
+            finally
             {
-                File.Move(temporary, ConfigurationPath);
+                if (File.Exists(temporary))
+                {
+                    File.Delete(temporary);
+                }
             }
         }
 

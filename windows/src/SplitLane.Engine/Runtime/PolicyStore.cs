@@ -436,7 +436,7 @@ public sealed class PolicyStore : IDisposable
     /// the ability to rename or re-permission - the folder itself, which is what the policy folder
     /// inside it relies on.
     /// </remarks>
-    private static void SecureRoot(string root)
+    internal static void SecureRoot(string root)
     {
         if (!Directory.Exists(root) || PolicyFileTrust.IsLink(root))
         {
