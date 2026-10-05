@@ -21,8 +21,9 @@ public sealed class CredentialIsolationSecurityTests : IDisposable
 {
     private static readonly SecurityIdentifier Me = WindowsIdentity.GetCurrent().User!;
 
-    // A value that cannot appear in a log line by accident.
-    private const string Password = "pw-SL-SEC-006-7f3a9c";
+    // Made at run time, so it cannot appear in a log line by accident - and is not a literal a secret
+    // scanner has to be told about.
+    private static readonly string Password = "pw-" + Guid.NewGuid().ToString("N");
 
     private readonly string _root = Path.Combine(Path.GetTempPath(), "sl-sec006-" + Guid.NewGuid().ToString("N"));
 
