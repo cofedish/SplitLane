@@ -108,12 +108,13 @@ public sealed class UdpRelay : IAsyncDisposable
 
         if (!_lanes.TryAdd((applicationPort, remote), lane))
         {
+            lane.Dispose();
             _pool.Release(lane.Port);
             return _lanes.TryGetValue((applicationPort, remote), out var raced) ? raced.Port : null;
         }
 
         _byLanePort[lane.Port] = lane;
-        _ = Task.Run(() => PumpAsync(lane, _stopping.Token));
+        _ = Task.Run(() => RunLaneAsync(lane));
 
         return lane.Port;
     }
@@ -145,14 +146,40 @@ public sealed class UdpRelay : IAsyncDisposable
 
             if (_lanes.TryRemove(key, out _))
             {
-                _byLanePort.TryRemove(lane.Port, out _);
-                _pool.Release(lane.Port);
+                Retire(lane);
             }
         }
 
         if (_associations.TryRemove(applicationPort, out var association))
         {
             _ = CloseAsync(association);
+        }
+    }
+
+    /// <summary>
+    /// Takes a lane out of use. Its socket is returned to the pool by its own loop, once that has ended.
+    /// </summary>
+    private void Retire(UdpLane lane)
+    {
+        _byLanePort.TryRemove(new KeyValuePair<ushort, UdpLane>(lane.Port, lane));
+        lane.Retire();
+    }
+
+    private async Task RunLaneAsync(UdpLane lane)
+    {
+        try
+        {
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(_stopping.Token, lane.Retiring);
+            await PumpAsync(lane, linked.Token).ConfigureAwait(false);
+        }
+        catch (ObjectDisposedException)
+        {
+            // The relay stopped before the loop began.
+        }
+        finally
+        {
+            lane.Dispose();
+            _pool.Release(lane.Port);
         }
     }
 
@@ -172,6 +199,14 @@ public sealed class UdpRelay : IAsyncDisposable
             try
             {
                 var result = await lane.ReceiveAsync(cancellationToken).ConfigureAwait(false);
+
+                if (lane.IsRetired)
+                {
+                    // Read in the moment the lane was given up: meant for whichever lane comes next,
+                    // or for nobody. Not relayed to this lane's remote.
+                    Interlocked.Increment(ref _refused);
+                    return;
+                }
 
                 if (!lane.IsFromApplication(result.RemoteEndPoint))
                 {
@@ -210,6 +245,12 @@ public sealed class UdpRelay : IAsyncDisposable
                     $"({ex.Message}); they are dropped rather than sent unproxied");
 
                 continue;
+            }
+
+            if (lane.IsRetired)
+            {
+                Interlocked.Increment(ref _refused);
+                return;
             }
 
             try
@@ -280,8 +321,7 @@ public sealed class UdpRelay : IAsyncDisposable
                 continue;
             }
 
-            _byLanePort.TryRemove(lane.Port, out _);
-            _pool.Release(lane.Port);
+            Retire(lane);
 
             // The association goes when its last lane does; it holds a connection at the proxy.
             if (!_lanes.Keys.Any(k => k.Port == key.Port) &&
@@ -312,9 +352,10 @@ public sealed class UdpRelay : IAsyncDisposable
 
         foreach (var (key, lane) in _lanes)
         {
-            _lanes.TryRemove(key, out _);
-            _byLanePort.TryRemove(lane.Port, out _);
-            _pool.Release(lane.Port);
+            if (_lanes.TryRemove(key, out _))
+            {
+                Retire(lane);
+            }
         }
 
         foreach (var (port, association) in _associations)

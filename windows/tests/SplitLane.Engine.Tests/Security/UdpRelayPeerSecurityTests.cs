@@ -125,6 +125,57 @@ public sealed class UdpRelayPeerSecurityTests
         Assert.Equal(0, acquired.Value.Socket.Available);
     }
 
+    [Fact]
+    public async Task A_reused_lane_socket_relays_only_to_its_new_remote()
+    {
+        // One socket in the pool, so the second conversation is given the first one's socket.
+        await using var server = new FakeAssociateServer();
+        using var pool = new UdpLanePool(size: 1);
+        await using var relay = new UdpRelay(
+            pool,
+            () => ProxyConfiguration.Default with
+            {
+                Endpoint = new ProxyEndpoint { Host = "127.0.0.1", Port = server.Port },
+                HandshakeTimeoutMilliseconds = 3000,
+            },
+            () => null);
+        using var application = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
+        var applicationPort = (ushort)((IPEndPoint)application.Client.LocalEndPoint!).Port;
+
+        var first = relay.LaneFor(applicationPort, IPAddress.Parse("203.0.113.1"), 443);
+        Assert.NotNull(first);
+        await application.SendAsync(new byte[] { 1 }, new IPEndPoint(IPAddress.Loopback, first.Value));
+        Assert.Equal(1, DestinationOf((await server.Relay.ReceiveAsync().WaitAsync(Wait)).Buffer));
+
+        relay.Forget(applicationPort);
+
+        // The socket comes back only once the first lane's loop has ended.
+        ushort? second = null;
+        for (var attempt = 0; attempt < 100 && second is null; attempt++)
+        {
+            second = relay.LaneFor(applicationPort, IPAddress.Parse("203.0.113.2"), 443);
+            if (second is null)
+            {
+                await Task.Delay(20);
+            }
+        }
+
+        Assert.Equal(first, second);
+
+        for (var i = 0; i < 20; i++)
+        {
+            await application.SendAsync(new byte[] { 2 }, new IPEndPoint(IPAddress.Loopback, second!.Value));
+        }
+
+        for (var i = 0; i < 20; i++)
+        {
+            Assert.Equal(2, DestinationOf((await server.Relay.ReceiveAsync().WaitAsync(Wait)).Buffer));
+        }
+    }
+
+    /// <summary>The last octet of the IPv4 destination a SOCKS5 datagram is addressed to.</summary>
+    private static int DestinationOf(byte[] datagram) => datagram[7];
+
     // ---- Helpers ----------------------------------------------------------------------------------
 
     private static Task<UdpAssociation> Open(FakeAssociateServer server, Action<RelayedDatagram> onDatagram) =>

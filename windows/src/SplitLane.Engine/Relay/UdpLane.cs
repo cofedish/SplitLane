@@ -37,6 +37,7 @@ namespace SplitLane.Engine.Relay;
 public sealed class UdpLane : IDisposable
 {
     private readonly UdpClient _socket;
+    private readonly CancellationTokenSource _retiring = new();
 
     /// <summary>Takes a lane from the reserved block.</summary>
     /// <param name="socket">A socket from the pool, already bound.</param>
@@ -102,15 +103,28 @@ public sealed class UdpLane : IDisposable
             new IPEndPoint(IPAddress.Loopback, ApplicationPort)).AsTask();
     }
 
+    /// <summary>Cancelled when the lane is given up; ends its receive loop.</summary>
+    public CancellationToken Retiring => _retiring.Token;
+
+    /// <summary>Whether the lane has been given up.</summary>
+    public bool IsRetired => _retiring.IsCancellationRequested;
+
     /// <summary>
-    /// Gives the lane up.
+    /// Gives the lane up: ends its receive loop. The socket goes back to the pool only once that loop
+    /// has finished, so two loops never read the same socket and a later lane never has its
+    /// application's datagrams taken by an earlier one and relayed to the earlier remote.
     /// </summary>
-    /// <remarks>
-    /// The socket belongs to the pool, which replaces it rather than handing the same one out again -
-    /// datagrams for this conversation may still be arriving, and a lane that inherited them would
-    /// give one application another's traffic.
-    /// </remarks>
-    public void Dispose()
+    public void Retire()
     {
+        try
+        {
+            _retiring.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
     }
+
+    /// <inheritdoc />
+    public void Dispose() => _retiring.Dispose();
 }
