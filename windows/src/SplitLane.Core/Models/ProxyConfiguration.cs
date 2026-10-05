@@ -77,10 +77,9 @@ public sealed record ProxyEndpoint
 /// configuration ever contains one.
 /// </para>
 /// <para>
-/// The password lives in <c>%ProgramData%\SplitLane\credential.bin</c>, a DPAPI blob with
-/// <c>LocalMachine</c> scope. That makes it meaningless on another machine, not private on this one:
-/// any process here that can read the file can decrypt it, and no code sets an ACL on it - it has
-/// whatever permissions it inherits from the folder (THREAT_MODEL W-9).
+/// The password is held by the service, in a directory only SYSTEM and Administrators can read, and is
+/// used only for the protocol, host and port and the account it was entered for (SL-SEC-006,
+/// THREAT_MODEL W-9). The window hands it over the control channel and keeps no copy.
 /// </para>
 /// </remarks>
 public sealed record CredentialReference
@@ -95,8 +94,8 @@ public sealed record CredentialReference
     /// Opaque key meant to name the protected blob that holds the password.
     /// </summary>
     /// <remarks>
-    /// Written by the app and not read by the engine, which always takes the password from
-    /// <c>credential.bin</c> when a username is present. Nothing depends on its value.
+    /// Written by the app and not read by the engine, which takes the password from its own store when
+    /// one is stored for this exact proxy and username. Nothing depends on its value.
     /// </remarks>
     public string? SecretKey { get; init; }
 }

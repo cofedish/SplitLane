@@ -1,4 +1,5 @@
 using SplitLane.App.Infrastructure;
+using SplitLane.Core.Ipc;
 using SplitLane.Core.Models;
 
 namespace SplitLane.App.ViewModels;
@@ -217,9 +218,19 @@ public sealed class ProxyViewModel : ObservableObject
                 return "A new password will be stored when you save.";
             }
 
-            return _main.Store.HasStoredCredential
-                ? "A password is stored for this machine. Type a new one to replace it."
-                : "No password stored yet.";
+            if (!_main.EngineConnected)
+            {
+                return "The SplitLane service keeps the password, and it is not running.";
+            }
+
+            return _main.Status?.ProxyCredentialFor switch
+            {
+                null => "No password stored yet.",
+                var stored when _main.Status.ProxyCredentialInUse =>
+                    $"A password is stored for {stored}. Type a new one to replace it.",
+                var stored =>
+                    $"The stored password is for {stored}, not this proxy. Type it again to use it here.",
+            };
         }
     }
 
@@ -308,23 +319,43 @@ public sealed class ProxyViewModel : ObservableObject
         Raise(nameof(UdpNote));
     }
 
-    /// <summary>Writes the password to the credential store, if one was typed.</summary>
-    public void PersistCredential()
+    /// <summary>Re-reads what the service says about the stored password.</summary>
+    public void OnStatusChanged() => Raise(nameof(CredentialStatus));
+
+    /// <summary>
+    /// Hands a typed password to the service, bound to the proxy and account on this page.
+    /// </summary>
+    /// <returns>Null when nothing needed saying; otherwise why the password was not stored.</returns>
+    public async Task<string?> PersistCredentialAsync()
     {
         if (!RequiresAuthentication)
         {
-            _main.Store.ClearCredential();
-            return;
+            // Not fatal if the service is not running: a stored password is used only for the proxy and
+            // account it was entered for, and this configuration names no account.
+            await _main.Engine.ClearProxyCredentialAsync().ConfigureAwait(true);
+            return null;
         }
 
-        if (_passwordEdited && Password.Length > 0)
+        if (!_passwordEdited || Password.Length == 0)
         {
-            _main.Store.SaveCredential(Password);
-            _password = string.Empty;
-            _passwordEdited = false;
-            Raise(nameof(Password));
-            Raise(nameof(CredentialStatus));
+            return null;
         }
+
+        var proxy = ToProxyConfiguration();
+        var reply = await _main.Engine.SetProxyCredentialAsync(new ProxyCredentialUpdate(
+            proxy.Type, proxy.Endpoint.Host, proxy.Endpoint.Port, proxy.Credential!.Username, Password)).ConfigureAwait(true);
+
+        if (!reply.Succeeded)
+        {
+            return $"The password was not stored: {reply.Message ?? "the SplitLane service refused it"}. " +
+                   "The service keeps it, so it must be running.";
+        }
+
+        _password = string.Empty;
+        _passwordEdited = false;
+        Raise(nameof(Password));
+        Raise(nameof(CredentialStatus));
+        return null;
     }
 
     private async Task TestAsync()

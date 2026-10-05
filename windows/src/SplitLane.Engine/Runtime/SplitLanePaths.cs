@@ -52,8 +52,17 @@ public static class SplitLanePaths
     /// </remarks>
     public static string UpdateStaging => Path.Combine(Root, "updates");
 
-    /// <summary>The DPAPI-protected proxy credential.</summary>
+    /// <summary>
+    /// Where the proxy password used to be: a DPAPI blob every local user could read. Read once, to move
+    /// it into <see cref="SecretsDirectory"/>, then deleted (SL-SEC-006).
+    /// </summary>
     public static string CredentialFile => Path.Combine(Root, "credential.bin");
+
+    /// <summary>
+    /// Secrets the service holds: SYSTEM and Administrators only, not even readable by users
+    /// (<see cref="ProtectedDirectory"/>, <see cref="ProxyCredentialStore"/>).
+    /// </summary>
+    public static string SecretsDirectory => Path.Combine(Root, "Secrets");
 
     /// <summary>Engine log.</summary>
     public static string EngineLog => Path.Combine(Root, "logs", "engine.log");

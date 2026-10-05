@@ -172,6 +172,47 @@ public sealed class EngineRuntime : IAsyncDisposable
     }
 
     /// <summary>
+    /// Moves a password left in the old, user-readable file into the service's own store, then applies
+    /// the configuration again so it is used. Run once by the service at start (SL-SEC-006).
+    /// </summary>
+    public void MigrateLegacyCredential()
+    {
+        lock (_applyGate)
+        {
+            if (_store.Credentials.MigrateLegacy(_store.CredentialPath, _userConfiguration.Proxy))
+            {
+                ApplyLocked(_userConfiguration);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Stores the proxy password the user entered, for exactly the proxy and account it names, and
+    /// starts using it if that is the proxy in force.
+    /// </summary>
+    public void SetProxyCredential(ProxyCredentialBinding binding, string password)
+    {
+        ArgumentNullException.ThrowIfNull(binding);
+        ArgumentNullException.ThrowIfNull(password);
+
+        lock (_applyGate)
+        {
+            _store.Credentials.Save(binding, password);
+            _credential = _store.ResolveCredential(_configuration.Proxy);
+        }
+    }
+
+    /// <summary>Forgets the stored proxy password.</summary>
+    public void ClearProxyCredential()
+    {
+        lock (_applyGate)
+        {
+            _store.Credentials.Clear();
+            _credential = null;
+        }
+    }
+
+    /// <summary>
     /// Makes sure the policy folder exists with administrator-only permissions and starts watching it.
     /// Run once by the host; a failure is reported and routing carries on without a watcher.
     /// </summary>
@@ -759,6 +800,8 @@ public sealed class EngineRuntime : IAsyncDisposable
             PolicyDetail = _policy.Detail,
             ManagedRuleCount = _engine.Snapshot.ManagedRuleCount,
             RoutingLockedByPolicy = IsRoutingLockedByPolicy,
+            ProxyCredentialFor = _store.Credentials.Binding?.Display,
+            ProxyCredentialInUse = _credential is not null,
         };
     }
 

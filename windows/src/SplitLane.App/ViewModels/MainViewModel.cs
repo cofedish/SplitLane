@@ -265,6 +265,7 @@ public sealed class MainViewModel : ObservableObject
             {
                 Overview.OnStatusChanged();
                 Settings.OnStatusChanged();
+                Proxy.OnStatusChanged();
             }
         }
     }
@@ -279,6 +280,7 @@ public sealed class MainViewModel : ObservableObject
             {
                 Overview.OnStatusChanged();
                 Settings.OnStatusChanged();
+                Proxy.OnStatusChanged();
             }
         }
     }
@@ -466,12 +468,18 @@ public sealed class MainViewModel : ObservableObject
                 RedirectPort = Settings.RedirectPortValue,
             };
 
-            Proxy.PersistCredential();
+            var credentialProblem = await Proxy.PersistCredentialAsync().ConfigureAwait(true);
 
             Configuration = Store.Save(edited);
             HasUnsavedChanges = false;
 
             var reply = await _engine.ReloadAsync(Configuration.Version.Generation).ConfigureAwait(true);
+
+            if (credentialProblem is not null)
+            {
+                SetBanner(credentialProblem, isError: true);
+                return;
+            }
 
             SetBanner(
                 reply.Connected

@@ -91,6 +91,20 @@ public sealed class EngineClient
     public Task<EngineReply> ApplyUpdateAsync(CancellationToken cancellationToken = default)
         => SendAsync(new EngineRequest(EngineRequestKind.ApplyUpdate), cancellationToken);
 
+    /// <summary>
+    /// Hands the proxy password to the service, which stores it for exactly this proxy and account.
+    /// </summary>
+    /// <remarks>
+    /// The window keeps no copy and writes it nowhere (SL-SEC-006). It is sent only after the other end
+    /// of the channel has been proved to be the service (SL-SEC-010).
+    /// </remarks>
+    public Task<EngineReply> SetProxyCredentialAsync(ProxyCredentialUpdate credential, CancellationToken cancellationToken = default)
+        => SendAsync(new EngineRequest(EngineRequestKind.SetProxyCredential, ProxyCredential: credential), cancellationToken);
+
+    /// <summary>Asks the service to forget the stored proxy password.</summary>
+    public Task<EngineReply> ClearProxyCredentialAsync(CancellationToken cancellationToken = default)
+        => SendAsync(new EngineRequest(EngineRequestKind.ClearProxyCredential), cancellationToken);
+
     private static async Task<EngineReply> SendAsync(EngineRequest request, CancellationToken cancellationToken)
     {
         try

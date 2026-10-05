@@ -81,6 +81,30 @@ public enum EngineRequestKind
     /// connection. The engine finds updates; the person decides when to take one.
     /// </remarks>
     ApplyUpdate,
+
+    /// <summary>Store the proxy password the user entered. Payload is <see cref="EngineRequest.ProxyCredential"/>.</summary>
+    /// <remarks>
+    /// The window no longer writes the password anywhere itself (SL-SEC-006): it hands it to the
+    /// service, which keeps it where only the service can read it and uses it only for the protocol,
+    /// host, port and account it was entered for. The channel's server end is authenticated before
+    /// this is sent (SL-SEC-010).
+    /// </remarks>
+    SetProxyCredential,
+
+    /// <summary>Forget the stored proxy password.</summary>
+    ClearProxyCredential,
+}
+
+/// <summary>A proxy password, and exactly which proxy and account it is for.</summary>
+/// <param name="Type">The protocol.</param>
+/// <param name="Host">The proxy host.</param>
+/// <param name="Port">The proxy port.</param>
+/// <param name="Username">The account.</param>
+/// <param name="Password">The secret. Never logged, never echoed back.</param>
+public sealed record ProxyCredentialUpdate(ProxyProtocolType Type, string Host, ushort Port, string Username, string Password)
+{
+    /// <summary>The record's default text would include the password; this never does.</summary>
+    public override string ToString() => $"ProxyCredentialUpdate {{ {Type} {Username}@{Host}:{Port} }}";
 }
 
 /// <summary>
@@ -99,12 +123,14 @@ public enum EngineRequestKind
 /// <param name="Configuration">Payload for <see cref="EngineRequestKind.ApplyConfiguration"/>.</param>
 /// <param name="Enabled">Payload for <see cref="EngineRequestKind.SetDirectFlowLogging"/>.</param>
 /// <param name="Limit">How many events <see cref="EngineRequestKind.RequestActivity"/> should return.</param>
+/// <param name="ProxyCredential">Payload for <see cref="EngineRequestKind.SetProxyCredential"/>.</param>
 public sealed record EngineRequest(
     EngineRequestKind Kind,
     ulong Generation = 0,
     RuntimeConfiguration? Configuration = null,
     bool Enabled = false,
-    int Limit = 200);
+    int Limit = 200,
+    ProxyCredentialUpdate? ProxyCredential = null);
 
 /// <summary>Whether the engine did what was asked.</summary>
 public enum EngineResponseKind
@@ -252,6 +278,12 @@ public sealed record EngineStatus
 
     /// <summary>Whether the policy requires routing to stay on, so the app should not offer to stop it.</summary>
     public bool RoutingLockedByPolicy { get; init; }
+
+    /// <summary>Which proxy and account a stored password is for, or null when none is stored. Never the password.</summary>
+    public string? ProxyCredentialFor { get; init; }
+
+    /// <summary>Whether the stored password matches the proxy in force and is being used.</summary>
+    public bool ProxyCredentialInUse { get; init; }
 
     /// <summary>How long the engine has been diverting.</summary>
     [JsonIgnore]

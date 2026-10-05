@@ -12,10 +12,9 @@ namespace SplitLane.Engine.Runtime;
 /// </summary>
 /// <remarks>
 /// <para>
-/// The two are stored separately and that separation is the whole security story. The document is
-/// plain JSON that a user can read and a support request can include; the credential is a DPAPI blob
-/// scoped to the local machine, so it is meaningless if copied elsewhere and it never appears in the
-/// file anyone would think to attach to a bug report.
+/// The two are stored separately. The document is plain JSON that a user can read and a support
+/// request can include. The password is held by <see cref="ProxyCredentialStore"/>, where only the
+/// service can read it, bound to the proxy it was entered for (SL-SEC-006).
 /// </para>
 /// <para>
 /// Writes are atomic. A configuration half-written when the machine loses power would otherwise be a
@@ -35,15 +34,23 @@ public sealed class ConfigurationStore
 
     /// <summary>Builds a store over the standard paths.</summary>
     public ConfigurationStore()
-        : this(SplitLanePaths.ConfigurationFile, SplitLanePaths.CredentialFile, SplitLanePaths.LegacyConfigurationFile)
+        : this(SplitLanePaths.ConfigurationFile, SplitLanePaths.CredentialFile, SplitLanePaths.LegacyConfigurationFile,
+            new ProxyCredentialStore())
     {
     }
 
     /// <summary>Builds a store over explicit paths. Used by tests and by <c>--explain --config</c>.</summary>
     /// <param name="configurationPath">The schema 2 document, read and written.</param>
-    /// <param name="credentialPath">The protected credential.</param>
+    /// <param name="credentialPath">Where an old, user-readable password file may be, to migrate from.</param>
     /// <param name="legacyConfigurationPath">The schema 1 document, read only; null for none.</param>
-    public ConfigurationStore(string configurationPath, string credentialPath, string? legacyConfigurationPath = null)
+    /// <param name="credentials">
+    /// Where the password is kept; by default a protected directory beside the configuration.
+    /// </param>
+    public ConfigurationStore(
+        string configurationPath,
+        string credentialPath,
+        string? legacyConfigurationPath = null,
+        ProxyCredentialStore? credentials = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(configurationPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(credentialPath);
@@ -51,7 +58,12 @@ public sealed class ConfigurationStore
         ConfigurationPath = configurationPath;
         CredentialPath = credentialPath;
         LegacyConfigurationPath = legacyConfigurationPath;
+        Credentials = credentials ?? new ProxyCredentialStore(new ProtectedDirectory(
+            Path.Combine(Path.GetDirectoryName(Path.GetFullPath(configurationPath))!, "Secrets"), UserAccess.None));
     }
+
+    /// <summary>Where the proxy password is kept.</summary>
+    public ProxyCredentialStore Credentials { get; }
 
     /// <summary>Where the document lives.</summary>
     public string ConfigurationPath { get; }
@@ -88,7 +100,7 @@ public sealed class ConfigurationStore
         }
     }
 
-    /// <summary>Where the protected credential lives.</summary>
+    /// <summary>Where an old, user-readable password file may be (SL-SEC-006). Migrated from, then deleted.</summary>
     public string CredentialPath { get; }
 
     /// <summary>
@@ -172,89 +184,13 @@ public sealed class ConfigurationStore
     }
 
     /// <summary>
-    /// Stores the proxy password, protected to this machine.
+    /// The credential for a configuration's proxy, or null when none is configured or none is stored
+    /// for exactly that proxy and account (SL-SEC-006).
     /// </summary>
-    /// <remarks>
-    /// <c>LocalMachine</c> scope rather than <c>CurrentUser</c>, because the engine reads it as a
-    /// service account and the app writes it as the interactive user. LocalMachine scope means any
-    /// process on this machine that can read the file can decrypt it, and no code here narrows the
-    /// file's ACL, so it inherits the folder's; the encryption only keeps it away from a copied disk.
-    /// Tightening that is on the fleet plan (docs/ENTERPRISE_READINESS.md, P1-5).
-    /// </remarks>
-    public void SaveCredential(string password)
-    {
-        ArgumentNullException.ThrowIfNull(password);
-
-        lock (_gate)
-        {
-            var directory = Path.GetDirectoryName(CredentialPath);
-            if (!string.IsNullOrEmpty(directory))
-            {
-                Directory.CreateDirectory(directory);
-            }
-
-            var protectedBytes = ProtectedData.Protect(
-                Encoding.UTF8.GetBytes(password), null, DataProtectionScope.LocalMachine);
-
-            File.WriteAllBytes(CredentialPath, protectedBytes);
-        }
-    }
-
-    /// <summary>Removes the stored password.</summary>
-    public void ClearCredential()
-    {
-        lock (_gate)
-        {
-            if (File.Exists(CredentialPath))
-            {
-                File.Delete(CredentialPath);
-            }
-        }
-    }
-
-    /// <summary>Reads the proxy password, or null when there is none.</summary>
-    public string? LoadPassword()
-    {
-        lock (_gate)
-        {
-            if (!File.Exists(CredentialPath))
-            {
-                return null;
-            }
-
-            try
-            {
-                var unprotected = ProtectedData.Unprotect(
-                    File.ReadAllBytes(CredentialPath), null, DataProtectionScope.LocalMachine);
-
-                return Encoding.UTF8.GetString(unprotected);
-            }
-            catch (CryptographicException)
-            {
-                // The blob was written on another machine, or the machine key changed. There is
-                // nothing to recover; the user has to re-enter the password.
-                SplitLaneLog.Warning(LogCategory, "stored proxy credential could not be decrypted on this machine");
-                return null;
-            }
-            catch (IOException ex)
-            {
-                SplitLaneLog.Warning(LogCategory, $"stored proxy credential is unreadable: {ex.Message}");
-                return null;
-            }
-        }
-    }
-
-    /// <summary>Builds the SOCKS5 credential for a configuration, or null when none is configured.</summary>
     public Socks5Credential? ResolveCredential(ProxyConfiguration proxy)
     {
         ArgumentNullException.ThrowIfNull(proxy);
 
-        if (proxy.Credential is not { } reference || string.IsNullOrEmpty(reference.Username))
-        {
-            return null;
-        }
-
-        var password = LoadPassword();
-        return password is null ? null : new Socks5Credential(reference.Username, password);
+        return proxy.Credential is { Username: { Length: > 0 } } ? Credentials.Resolve(proxy) : null;
     }
 }

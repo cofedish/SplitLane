@@ -202,17 +202,20 @@ where it is.
 
 ### W-9 — The credential at rest
 
-**Severity: mitigated off the machine; open on it.**
+**Severity: resolved on the machine (SL-SEC-006, 2026-10-06); administrators excepted.**
 
-The proxy password is a DPAPI blob scoped to the local machine,
-`%ProgramData%\SplitLane\credential.bin`, stored outside the configuration file. It is meaningless if
-copied to another machine, and it never appears in the JSON that someone would attach to a bug
-report.
+The proxy password used to be a DPAPI LocalMachine blob, `%ProgramData%\SplitLane\credential.bin`,
+written by the window as the user. LocalMachine scope only makes a blob useless on another machine:
+every local user could read the file and decrypt it. And it was not tied to anything, so whoever could
+change the proxy address could have the engine send it to a host of their choosing.
 
-It is not protected from this machine. `LocalMachine` scope means any process on the machine that can
-read the file can decrypt it, and no code sets an ACL on the file: it has whatever permissions it
-inherits from `%ProgramData%\SplitLane`. Restricting it to SYSTEM is planned
-([ENTERPRISE_READINESS.md](ENTERPRISE_READINESS.md), P1-5).
+Now the window hands the password to the service over the authenticated control channel (SL-SEC-010)
+and never writes it anywhere. The service keeps it in `%ProgramData%\SplitLane\Secrets`, a directory
+created with SYSTEM and Administrators only and inheritance cut, still DPAPI-protected, and stored
+with the protocol, host, port and account it was entered for: it is used only for a proxy that matches
+all four. An old `credential.bin` is moved in, bound to the proxy configured at the time, and deleted
+the first time the service starts. Administrators can still read it, which is the boundary the engine
+runs inside anyway.
 
 `ConfigurationTests.EncodedConfigurationNeverContainsSecrets` enforces the structural property: there
 is no field on `ProxyConfiguration` that could hold a password, only a locator. The UI can report

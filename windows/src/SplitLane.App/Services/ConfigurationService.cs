@@ -1,5 +1,4 @@
 using System.IO;
-using System.Security.Cryptography;
 using System.Text;
 using SplitLane.Core.Configuration;
 using SplitLane.Core.Models;
@@ -20,6 +19,11 @@ namespace SplitLane.App.Services;
 /// <para>
 /// Once written, the engine is asked to reload. If it is not running there is nothing to tell, and
 /// it will read the file when it starts.
+/// </para>
+/// <para>
+/// The proxy password is not here. It used to be written next to the configuration by this class,
+/// where every local user could read and decrypt it; it is now handed to the service, which keeps it
+/// (SL-SEC-006).
 /// </para>
 /// <para>
 /// Which file is read follows the engine's rule exactly (<c>ConfigurationStore.SourcePath</c>). If
@@ -45,9 +49,6 @@ public sealed class ConfigurationService
 
     /// <summary>The schema 1 document. Read to migrate from, never written.</summary>
     public string LegacyConfigurationPath { get; } = Path.Combine(Root, "configuration.json");
-
-    /// <summary>The protected proxy credential.</summary>
-    public string CredentialPath { get; } = Path.Combine(Root, "credential.bin");
 
     /// <summary>Where the engine writes its log.</summary>
     public string EngineLogPath { get; } = Path.Combine(Root, "logs", "engine.log");
@@ -169,35 +170,4 @@ public sealed class ConfigurationService
 
         return next;
     }
-
-    /// <summary>Stores the proxy password where only this machine can read it.</summary>
-    public void SaveCredential(string password)
-    {
-        ArgumentNullException.ThrowIfNull(password);
-
-        lock (_gate)
-        {
-            Directory.CreateDirectory(Root);
-
-            var protectedBytes = ProtectedData.Protect(
-                Encoding.UTF8.GetBytes(password), null, DataProtectionScope.LocalMachine);
-
-            File.WriteAllBytes(CredentialPath, protectedBytes);
-        }
-    }
-
-    /// <summary>Removes the stored password.</summary>
-    public void ClearCredential()
-    {
-        lock (_gate)
-        {
-            if (File.Exists(CredentialPath))
-            {
-                File.Delete(CredentialPath);
-            }
-        }
-    }
-
-    /// <summary>Whether a password has been stored. The password itself is never returned to the UI.</summary>
-    public bool HasStoredCredential => File.Exists(CredentialPath);
 }

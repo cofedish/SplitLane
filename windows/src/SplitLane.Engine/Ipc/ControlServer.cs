@@ -286,9 +286,58 @@ public sealed class ControlServer : IAsyncDisposable
                     ? EngineResponse.Ok
                     : EngineResponse.Failed(_runtime.Updates.LastError ?? "the update could not be applied");
 
+            case EngineRequestKind.SetProxyCredential:
+                if (request.ProxyCredential is not { } credential)
+                {
+                    return EngineResponse.Failed("SetProxyCredential carried no credential");
+                }
+
+                if (!ProxyCredentialAcceptable(credential, out var refusal))
+                {
+                    return EngineResponse.Failed(refusal);
+                }
+
+                // Bound to exactly what was entered for; used only while that is the proxy in force.
+                _runtime.SetProxyCredential(
+                    new ProxyCredentialBinding(credential.Type, credential.Host.Trim(), credential.Port, credential.Username.Trim()),
+                    credential.Password);
+                return EngineResponse.Ok;
+
+            case EngineRequestKind.ClearProxyCredential:
+                _runtime.ClearProxyCredential();
+                return EngineResponse.Ok;
+
             default:
                 return EngineResponse.Failed($"Unsupported request {request.Kind}");
         }
+    }
+
+    /// <summary>Checks a credential before the service stores it. The message never names the password.</summary>
+    internal static bool ProxyCredentialAcceptable(ProxyCredentialUpdate credential, out string refusal)
+    {
+        refusal = string.Empty;
+
+        if (!Enum.IsDefined(credential.Type) || credential.Port == 0)
+        {
+            refusal = "the credential names no valid proxy";
+        }
+        else if (string.IsNullOrWhiteSpace(credential.Host) || credential.Host.Length > 253 ||
+                 credential.Host.Any(char.IsControl))
+        {
+            refusal = "the credential names no valid proxy host";
+        }
+        else if (string.IsNullOrWhiteSpace(credential.Username) || credential.Username.Length > 256 ||
+                 credential.Username.Any(char.IsControl))
+        {
+            refusal = "the credential names no valid account";
+        }
+        else if (credential.Password is not { Length: > 0 and <= ProxyCredentialStore.MaxPasswordLength } ||
+                 credential.Password.Contains('\0', StringComparison.Ordinal))
+        {
+            refusal = "the password is empty or too long";
+        }
+
+        return refusal.Length == 0;
     }
 
     /// <summary>Reads one length-prefixed frame, or null when the peer went away.</summary>

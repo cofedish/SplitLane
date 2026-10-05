@@ -37,6 +37,10 @@ internal sealed class EngineHost : IAsyncDisposable
         _runtime = new EngineRuntime(_store, options);
         _runtime.LoadConfiguration();
 
+        // The service is the only thing that may move the old, user-readable password file; --explain,
+        // which runs unelevated, never gets here.
+        _runtime.MigrateLegacyCredential();
+
         // After the first load, so a policy already in place applies from the first decision; the
         // watcher is what makes a rule an administrator removes stop applying without a restart.
         _runtime.StartPolicyWatch();
