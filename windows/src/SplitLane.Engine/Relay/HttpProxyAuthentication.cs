@@ -54,6 +54,47 @@ internal static class HttpProxyAuthentication
     /// <summary>Supported schemes, most preferred first. Basic, the only one that sends the password, is last.</summary>
     public static IReadOnlyList<string> SupportedSchemes { get; } = ["Negotiate", "NTLM", "Basic"];
 
+    /// <summary>How much a scheme protects the password: Basic sends it, NTLM and Negotiate never do.</summary>
+    public static int Strength(string scheme) => scheme.ToUpperInvariant() switch
+    {
+        "NEGOTIATE" => 3,
+        "NTLM" => 2,
+        "BASIC" => 1,
+        _ => 0,
+    };
+
+    /// <summary>
+    /// Why the password may not be sent with a scheme to this proxy, or null when it may (SL-SEC-011).
+    /// </summary>
+    /// <remarks>
+    /// Basic puts the password on the wire in base64. To a proxy on this machine that is irrelevant; to
+    /// one elsewhere it is readable by anyone on the path, so it needs the user's explicit choice. And
+    /// a proxy that has accepted NTLM or Negotiate from this account before and now offers only Basic is
+    /// what an attacker rewriting the 407 looks like, so that is refused whatever was chosen.
+    /// </remarks>
+    public static string? BasicRefusal(
+        string scheme, ProxyConfiguration proxy, Socks5Credential credential, string? strongestAccepted)
+    {
+        if (!scheme.Equals("Basic", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        if (strongestAccepted is not null && Strength(strongestAccepted) > Strength(scheme))
+        {
+            return $"The proxy accepted {strongestAccepted} before and now offers only Basic; the password is not " +
+                   "sent unencrypted after a downgrade";
+        }
+
+        if (!proxy.Endpoint.IsLoopback && !credential.AllowPlaintextBasic)
+        {
+            return $"The proxy offers only Basic authentication, which would send the password unencrypted to " +
+                   $"{proxy.Endpoint.DisplayString}. Allow Basic for this proxy on the Proxy page to use it";
+        }
+
+        return null;
+    }
+
     /// <summary>The best supported scheme the proxy offers, or null when there is none in common.</summary>
     public static string? Choose(IReadOnlyList<ProxyAuthenticationChallenge> challenges)
         => SupportedSchemes.FirstOrDefault(scheme => challenges.Any(challenge => challenge.Is(scheme)));
@@ -221,6 +262,14 @@ internal sealed class HttpAuthenticationMemory
 {
     private readonly ConcurrentDictionary<string, string> _schemes = new(StringComparer.OrdinalIgnoreCase);
 
+    // The strongest scheme this proxy ever accepted from this account. Unlike the scheme above, never
+    // forgotten on a refusal: it is what makes a later "Basic only" recognisable as a downgrade.
+    private readonly ConcurrentDictionary<string, string> _strongest = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The strongest scheme the proxy has accepted from this account, or null.</summary>
+    public string? StrongestAccepted(ProxyConfiguration proxy, Socks5Credential? credential)
+        => credential is not null && _strongest.TryGetValue(Key(proxy, credential), out var scheme) ? scheme : null;
+
     /// <summary>The scheme that last worked, or null to start by asking.</summary>
     public string? Lookup(ProxyConfiguration proxy, Socks5Credential? credential)
         => credential is not null && _schemes.TryGetValue(Key(proxy, credential), out var scheme) ? scheme : null;
@@ -240,6 +289,10 @@ internal sealed class HttpAuthenticationMemory
         else
         {
             _schemes[Key(proxy, credential)] = scheme;
+            _strongest.AddOrUpdate(
+                Key(proxy, credential),
+                scheme,
+                (_, previous) => HttpProxyAuthentication.Strength(scheme) > HttpProxyAuthentication.Strength(previous) ? scheme : previous);
         }
     }
 

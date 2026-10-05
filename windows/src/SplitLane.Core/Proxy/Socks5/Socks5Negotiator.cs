@@ -14,6 +14,12 @@ public sealed class Socks5Credential(string username, string password)
     /// <summary>The username. Not a secret.</summary>
     public string Username { get; } = username ?? throw new ArgumentNullException(nameof(username));
 
+    /// <summary>
+    /// Whether the user allowed this password to be sent with HTTP Basic to a proxy that is not on this
+    /// machine, where it crosses the network unencrypted (SL-SEC-011). Off unless explicitly chosen.
+    /// </summary>
+    public bool AllowPlaintextBasic { get; init; }
+
     /// <summary>The password.</summary>
     public string Password { get; } = password ?? throw new ArgumentNullException(nameof(password));
 

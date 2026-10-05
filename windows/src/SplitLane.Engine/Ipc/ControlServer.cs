@@ -300,7 +300,8 @@ public sealed class ControlServer : IAsyncDisposable
                 // Bound to exactly what was entered for; used only while that is the proxy in force.
                 _runtime.SetProxyCredential(
                     new ProxyCredentialBinding(credential.Type, credential.Host.Trim(), credential.Port, credential.Username.Trim()),
-                    credential.Password);
+                    credential.Password,
+                    credential.AllowPlaintextBasic);
                 return EngineResponse.Ok;
 
             case EngineRequestKind.ClearProxyCredential:

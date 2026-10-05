@@ -135,7 +135,8 @@ public static class HttpConnectClient
 
         try
         {
-            if (credential is not null && memory?.Lookup(proxy, credential) is { } remembered)
+            if (credential is not null && memory?.Lookup(proxy, credential) is { } remembered &&
+                HttpProxyAuthentication.BasicRefusal(remembered, proxy, credential, memory.StrongestAccepted(proxy, credential)) is null)
             {
                 authenticator = HttpProxyAuthentication.Create(remembered, credential, proxy.Endpoint.Host);
             }
@@ -240,6 +241,13 @@ public static class HttpConnectClient
                             string.Join(", ", HttpProxyAuthentication.SupportedSchemes),
                             407,
                             offered);
+                    }
+
+                    // Never a silent downgrade to the one scheme that sends the password (SL-SEC-011).
+                    if (HttpProxyAuthentication.BasicRefusal(
+                            scheme, proxy, credential, memory?.StrongestAccepted(proxy, credential)) is { } refusal)
+                    {
+                        throw Fail(ConnectionErrorCategory.AuthenticationUnsupported, refusal, 407, offered);
                     }
 
                     authenticator = HttpProxyAuthentication.Create(scheme, credential, proxy.Endpoint.Host);

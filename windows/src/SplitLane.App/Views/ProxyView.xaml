@@ -167,6 +167,12 @@
                                        Foreground="{DynamicResource TextBrush}"
                                        Text="{Binding PlaintextWarning}" />
                         </Border>
+
+                        <CheckBox Margin="0,12,0,0"
+                                  AutomationProperties.AutomationId="AllowPlaintextBasic"
+                                  Visibility="{Binding AllowPlaintextBasicVisible, Converter={StaticResource BoolToVisible}}"
+                                  IsChecked="{Binding AllowPlaintextBasic}"
+                                  Content="Allow Basic authentication to this proxy (sends the password unencrypted; applies with the password)" />
                     </StackPanel>
                 </StackPanel>
             </Border>

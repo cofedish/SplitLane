@@ -101,7 +101,12 @@ public enum EngineRequestKind
 /// <param name="Port">The proxy port.</param>
 /// <param name="Username">The account.</param>
 /// <param name="Password">The secret. Never logged, never echoed back.</param>
-public sealed record ProxyCredentialUpdate(ProxyProtocolType Type, string Host, ushort Port, string Username, string Password)
+/// <param name="AllowPlaintextBasic">
+/// Whether the user allows HTTP Basic, which sends the password unencrypted, to a proxy that is not on
+/// this machine (SL-SEC-011). Stored with the password.
+/// </param>
+public sealed record ProxyCredentialUpdate(
+    ProxyProtocolType Type, string Host, ushort Port, string Username, string Password, bool AllowPlaintextBasic = false)
 {
     /// <summary>The record's default text would include the password; this never does.</summary>
     public override string ToString() => $"ProxyCredentialUpdate {{ {Type} {Username}@{Host}:{Port} }}";

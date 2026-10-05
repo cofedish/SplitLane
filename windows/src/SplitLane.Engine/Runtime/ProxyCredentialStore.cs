@@ -95,7 +95,7 @@ public sealed class ProxyCredentialStore
 
     /// <summary>Stores a password for one proxy, replacing whatever was stored.</summary>
     /// <exception cref="ArgumentException">The password or binding is not acceptable.</exception>
-    public void Save(ProxyCredentialBinding binding, string password)
+    public void Save(ProxyCredentialBinding binding, string password, bool allowPlaintextBasic = false)
     {
         ArgumentNullException.ThrowIfNull(binding);
         ArgumentNullException.ThrowIfNull(password);
@@ -112,7 +112,7 @@ public sealed class ProxyCredentialStore
 
         var secret = ProtectedData.Protect(Encoding.UTF8.GetBytes(password), Entropy, DataProtectionScope.LocalMachine);
         var document = JsonSerializer.SerializeToUtf8Bytes(new StoredCredential(
-            binding.Type, binding.Host, binding.Port, binding.Username, Convert.ToBase64String(secret)));
+            binding.Type, binding.Host, binding.Port, binding.Username, Convert.ToBase64String(secret), allowPlaintextBasic));
 
         lock (_gate)
         {
@@ -178,7 +178,7 @@ public sealed class ProxyCredentialStore
         {
             var password = Encoding.UTF8.GetString(
                 ProtectedData.Unprotect(Convert.FromBase64String(stored.Secret), Entropy, DataProtectionScope.LocalMachine));
-            return new Socks5Credential(stored.Binding.Username, password);
+            return new Socks5Credential(stored.Binding.Username, password) { AllowPlaintextBasic = stored.AllowPlaintextBasic };
         }
         catch (Exception ex) when (ex is CryptographicException or FormatException)
         {
@@ -269,7 +269,10 @@ public sealed class ProxyCredentialStore
                 var stored = JsonSerializer.Deserialize<StoredCredential>(File.ReadAllBytes(FilePath));
                 return stored is null
                     ? null
-                    : new Stored(new ProxyCredentialBinding(stored.Type, stored.Host, stored.Port, stored.Username), stored.Secret);
+                    : new Stored(
+                        new ProxyCredentialBinding(stored.Type, stored.Host, stored.Port, stored.Username),
+                        stored.Secret,
+                        stored.AllowPlaintextBasic);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
             {
@@ -278,7 +281,8 @@ public sealed class ProxyCredentialStore
         }
     }
 
-    private sealed record Stored(ProxyCredentialBinding Binding, string Secret);
+    private sealed record Stored(ProxyCredentialBinding Binding, string Secret, bool AllowPlaintextBasic);
 
-    private sealed record StoredCredential(ProxyProtocolType Type, string Host, ushort Port, string Username, string Secret);
+    private sealed record StoredCredential(
+        ProxyProtocolType Type, string Host, ushort Port, string Username, string Secret, bool AllowPlaintextBasic = false);
 }

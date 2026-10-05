@@ -190,14 +190,14 @@ public sealed class EngineRuntime : IAsyncDisposable
     /// Stores the proxy password the user entered, for exactly the proxy and account it names, and
     /// starts using it if that is the proxy in force.
     /// </summary>
-    public void SetProxyCredential(ProxyCredentialBinding binding, string password)
+    public void SetProxyCredential(ProxyCredentialBinding binding, string password, bool allowPlaintextBasic = false)
     {
         ArgumentNullException.ThrowIfNull(binding);
         ArgumentNullException.ThrowIfNull(password);
 
         lock (_applyGate)
         {
-            _store.Credentials.Save(binding, password);
+            _store.Credentials.Save(binding, password, allowPlaintextBasic);
             _credential = _store.ResolveCredential(_configuration.Proxy);
         }
     }

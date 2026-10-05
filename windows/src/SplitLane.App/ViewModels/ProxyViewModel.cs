@@ -91,6 +91,27 @@ public sealed class ProxyViewModel : ObservableObject
         : "This proxy is not on this machine. SOCKS5 sends the username and password unencrypted, so they will " +
           "cross the network in the clear.";
 
+    private bool _allowPlaintextBasic;
+
+    /// <summary>
+    /// Whether the password may be sent with HTTP Basic, unencrypted, to this proxy (SL-SEC-011). Off
+    /// unless chosen; stored with the password, so changing it means entering the password again.
+    /// </summary>
+    public bool AllowPlaintextBasic
+    {
+        get => _allowPlaintextBasic;
+        set
+        {
+            if (Set(ref _allowPlaintextBasic, value))
+            {
+                Raise(nameof(CredentialStatus));
+            }
+        }
+    }
+
+    /// <summary>Whether to offer the Basic choice: an HTTP proxy that is not on this machine.</summary>
+    public bool AllowPlaintextBasicVisible => Type == ProxyProtocolType.Http && PlaintextWarningVisible;
+
     /// <summary>What happens to a selected application's UDP with this protocol.</summary>
     public string UdpNote => Type == ProxyProtocolType.Http
         ? "HTTP CONNECT carries TCP only. A selected application's UDP is refused, never sent direct: QUIC falls " +
@@ -107,6 +128,7 @@ public sealed class ProxyViewModel : ObservableObject
             {
                 _main.MarkDirty();
                 Raise(nameof(PlaintextWarningVisible));
+                Raise(nameof(AllowPlaintextBasicVisible));
                 Raise(nameof(EndpointSummary));
             }
         }
@@ -136,6 +158,7 @@ public sealed class ProxyViewModel : ObservableObject
             {
                 _main.MarkDirty();
                 Raise(nameof(PlaintextWarningVisible));
+                Raise(nameof(AllowPlaintextBasicVisible));
             }
         }
     }
@@ -316,6 +339,7 @@ public sealed class ProxyViewModel : ObservableObject
         Raise(nameof(TypeBadge));
         Raise(nameof(AuthenticationSummary));
         Raise(nameof(PlaintextWarning));
+        Raise(nameof(AllowPlaintextBasicVisible));
         Raise(nameof(UdpNote));
     }
 
@@ -343,7 +367,8 @@ public sealed class ProxyViewModel : ObservableObject
 
         var proxy = ToProxyConfiguration();
         var reply = await _main.Engine.SetProxyCredentialAsync(new ProxyCredentialUpdate(
-            proxy.Type, proxy.Endpoint.Host, proxy.Endpoint.Port, proxy.Credential!.Username, Password)).ConfigureAwait(true);
+            proxy.Type, proxy.Endpoint.Host, proxy.Endpoint.Port, proxy.Credential!.Username, Password,
+            AllowPlaintextBasic && AllowPlaintextBasicVisible)).ConfigureAwait(true);
 
         if (!reply.Succeeded)
         {
