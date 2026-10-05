@@ -14,7 +14,7 @@ namespace SplitLane.Engine.Flows;
 /// <param name="ExecutablePath">Routing key of the owning process.</param>
 /// <param name="ApplicationName">Display name from the matched rule.</param>
 /// <param name="Hostname">Name the destination was resolved from, when the DNS observer saw it.</param>
-/// <param name="CreatedAt">When the entry was made, for expiry.</param>
+/// <param name="CreatedAt">When the entry was made.</param>
 public sealed record NatEntry(
     IPAddress OriginalSource,
     IPAddress OriginalDestination,
@@ -42,6 +42,24 @@ public sealed record NatEntry(
     /// </para>
     /// </remarks>
     public bool SynRedirected { get; set; }
+
+    private long _lastSeenTicks = CreatedAt.UtcTicks;
+    private int _closing;
+
+    /// <summary>
+    /// When a packet of this connection last passed, in either direction. Expiry is measured from here,
+    /// not from <see cref="CreatedAt"/> (SL-SEC-004): a connection that is in use is never forgotten.
+    /// </summary>
+    public DateTimeOffset LastSeen => new(Interlocked.Read(ref _lastSeenTicks), TimeSpan.Zero);
+
+    /// <summary>Whether a FIN or RST has been seen, after which a shorter idle limit applies.</summary>
+    public bool IsClosing => Volatile.Read(ref _closing) != 0;
+
+    /// <summary>Records that a packet of this connection passed.</summary>
+    internal void Touch(DateTimeOffset now) => Interlocked.Exchange(ref _lastSeenTicks, now.UtcTicks);
+
+    /// <summary>Records that the connection is being torn down.</summary>
+    internal void MarkClosing() => Volatile.Write(ref _closing, 1);
 
     /// <summary>The policy action captured for this connection.</summary>
     public RouteAction Action { get; init; } = RouteAction.Proxy;
@@ -97,9 +115,12 @@ public enum NatVerdict
 /// removes only rows that socket owns.
 /// </para>
 /// <para>
-/// Entries expire. Without expiry, a table keyed on a 16-bit port would accumulate stale rows for
-/// every connection the engine ever saw and eventually mis-attribute a recycled port to a long-dead
-/// flow — a leak of one app's traffic into another app's lane.
+/// Redirected entries expire after a period without traffic, not a fixed time after they were made
+/// (SL-SEC-004). They used to be dropped five minutes after creation however busy the connection was,
+/// after which its segments matched nothing and left DIRECT. The socket CLOSE remains the normal end;
+/// idle expiry only cleans up after a CLOSE that never arrived. A FIN or RST shortens the idle limit.
+/// When a redirected entry ends - CLOSE or expiry - a short-lived tombstone refuses any packet that
+/// still turns up for it, so a late segment is dropped rather than sent DIRECT.
 /// </para>
 /// </remarks>
 public sealed class NatTable(TimeProvider? timeProvider = null)
@@ -112,17 +133,36 @@ public sealed class NatTable(TimeProvider? timeProvider = null)
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
 
     /// <summary>
-    /// How long an entry survives without being claimed.
+    /// How long an entry survives without traffic (redirected entries) or without being claimed
+    /// (leave-alone decisions).
     /// </summary>
     /// <remarks>
     /// Generous relative to the gap between a socket-layer CONNECT event and the SYN that follows it
-    /// — microseconds — but short relative to ephemeral port reuse, which Windows spreads over
-    /// thousands of ports.
+    /// — microseconds — and to a quiet but open connection, but short relative to ephemeral port
+    /// reuse, which Windows spreads over thousands of ports.
     /// </remarks>
     public TimeSpan EntryLifetime { get; init; } = TimeSpan.FromMinutes(5);
 
+    /// <summary>The idle limit once a FIN or RST has been seen.</summary>
+    public TimeSpan ClosingLifetime { get; init; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>Records that a packet of a redirected connection passed, so it is not expired.</summary>
+    public void Touch(NatEntry entry, bool closing = false)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+        entry.Touch(_time.GetUtcNow());
+
+        if (closing)
+        {
+            entry.MarkClosing();
+        }
+    }
+
     /// <summary>Number of live entries.</summary>
     public int Count => _entries.Count;
+
+    /// <summary>The table's clock. Entries are stamped with it so expiry is measured on one clock.</summary>
+    public DateTimeOffset Now => _time.GetUtcNow();
 
     /// <summary>
     /// Records where a connection was really going, replacing any stale row for the same local end.
@@ -318,12 +358,8 @@ public sealed class NatTable(TimeProvider? timeProvider = null)
         {
             if (_entries.TryGetValue(key, out var entry) && SameSocket(entry.EndpointId, endpointId))
             {
-                if (entry.Action == RouteAction.ProxyOnly)
-                {
-                    _closedStrict[key] = new DirectDecision(entry.OriginalDestination,
-                        entry.OriginalDestinationPort, _time.GetUtcNow(), NatVerdict.Block, endpointId);
-                }
-
+                // Any redirected connection, not only a strict one: its last segments must not leave
+                // DIRECT after the row is gone.
                 RemoveEntry(key, entry);
             }
 
@@ -346,8 +382,8 @@ public sealed class NatTable(TimeProvider? timeProvider = null)
         found.Port == destinationPort && found.Destination.Equals(destination);
 
     /// <summary>
-    /// Drops expired non-strict rows. ProxyOnly and refusal rows remain until socket CLOSE or
-    /// routing shutdown so expiry cannot turn a protected flow into DIRECT.
+    /// Drops idle rows. ProxyOnly and refusal rows remain until socket CLOSE or routing shutdown, and an
+    /// expired redirected row leaves a tombstone, so expiry cannot turn a protected flow into DIRECT.
     /// </summary>
     public int Sweep()
     {
@@ -401,7 +437,8 @@ public sealed class NatTable(TimeProvider? timeProvider = null)
     private static bool SameSocket(ulong owner, ulong closing) => owner == 0 || owner == closing;
 
     private bool Expired(NatEntry entry) =>
-        entry.Action != RouteAction.ProxyOnly && _time.GetUtcNow() - entry.CreatedAt > EntryLifetime;
+        entry.Action != RouteAction.ProxyOnly &&
+        _time.GetUtcNow() - entry.LastSeen > (entry.IsClosing ? ClosingLifetime : EntryLifetime);
 
     private bool IsLive(FlowKey key) => _entries.TryGetValue(key, out var entry) && !Expired(entry);
 
@@ -413,6 +450,11 @@ public sealed class NatTable(TimeProvider? timeProvider = null)
         }
 
         _redirected.TryRemove(new KeyValuePair<PortSlot, FlowKey>(key.Slot, key));
+
+        // A tombstone: a segment of this connection that still turns up - after a CLOSE, or after idle
+        // expiry - is refused, never sent DIRECT. A new CONNECT on the same local end replaces it.
+        _closedStrict[key] = new DirectDecision(
+            entry.OriginalDestination, entry.OriginalDestinationPort, _time.GetUtcNow(), NatVerdict.Block, entry.EndpointId);
         return true;
     }
 

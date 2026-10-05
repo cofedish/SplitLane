@@ -828,7 +828,7 @@ public sealed class DivertPipeline : IAsyncDisposable
             case RouteAction.ProxyOnly:
                 if (!_nat.Record(key, NatTable.EntryFor(
                         local, remote, flow.RemotePort, flow.ProcessId, flow.ExecutablePath, rule, flow.RemoteHostname,
-                        DateTimeOffset.UtcNow) with
+                        _nat.Now) with
                     { Action = decision.Action, RuleKey = decision.RuleKey, EndpointId = endpointId }))
                 {
                     // Another redirected connection holds this family and port. After the rewrite the
@@ -1229,6 +1229,9 @@ public sealed class DivertPipeline : IAsyncDisposable
             // Only connections whose opening SYN was redirected. If the SYN got out before the
             // socket event was processed, the connection is already established with its real
             // destination, and rewriting its later packets breaks something that was working.
+            // In use: a busy connection is never forgotten (SL-SEC-004).
+            _nat.Touch(entry, closing: view.IsTcpFin || view.IsTcpReset);
+
             if (view.IsTcpSyn)
             {
                 entry.SynRedirected = true;
@@ -1508,6 +1511,8 @@ public sealed class DivertPipeline : IAsyncDisposable
             // that port.
             return PacketAction.Drop;
         }
+
+        _nat.Touch(entry, closing: view.IsTcpFin || view.IsTcpReset);
 
         if (!RedirectRewriter.TryRestoreFromListener(
                 packet, entry.OriginalDestination, entry.OriginalDestinationPort, entry.OriginalSource))

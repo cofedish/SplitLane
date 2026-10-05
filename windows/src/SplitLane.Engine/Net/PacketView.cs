@@ -86,6 +86,12 @@ public readonly ref struct PacketView
         (_buffer[TransportOffset + 13] & 0x02) != 0 &&
         (_buffer[TransportOffset + 13] & 0x10) == 0;
 
+    /// <summary>True when the TCP FIN flag is set.</summary>
+    public bool IsTcpFin =>
+        Protocol == ProtocolTcp &&
+        _buffer.Length > TransportOffset + 13 &&
+        (_buffer[TransportOffset + 13] & 0x01) != 0;
+
     /// <summary>True when the TCP RST flag is set.</summary>
     public bool IsTcpReset =>
         Protocol == ProtocolTcp &&
