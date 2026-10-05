@@ -42,6 +42,16 @@ public static class SplitLanePaths
     /// </remarks>
     public static string PolicyFile => Path.Combine(Root, "Policy", "policy.json");
 
+    /// <summary>
+    /// Where update packages are staged before Windows Installer runs them as SYSTEM.
+    /// </summary>
+    /// <remarks>
+    /// A <see cref="ProtectedDirectory"/>: SYSTEM and Administrators only, inheritance cut. The folder
+    /// above lets every user create files and folders, so this one is never trusted because of its
+    /// name - see <see cref="Update.UpdateStaging"/> (SL-SEC-001).
+    /// </remarks>
+    public static string UpdateStaging => Path.Combine(Root, "updates");
+
     /// <summary>The DPAPI-protected proxy credential.</summary>
     public static string CredentialFile => Path.Combine(Root, "credential.bin");
 

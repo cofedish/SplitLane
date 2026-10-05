@@ -1,7 +1,5 @@
-using System.Diagnostics;
 using System.Net.Http;
 using System.Reflection;
-using System.Security.Cryptography;
 using SplitLane.Core.Logging;
 using SplitLane.Core.Update;
 using SplitLane.Engine.Runtime;
@@ -73,15 +71,34 @@ public sealed class UpdateService : IDisposable
     private static readonly TimeSpan FirstCheckDelay = TimeSpan.FromMinutes(3);
 
     private readonly HttpClient _http;
+    private readonly UpdateStaging _staging;
+    private readonly IUpdateInstaller _installer;
+    private readonly string _releaseKey;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private Timer? _timer;
 
     /// <summary>Builds the service. Nothing is fetched until <see cref="Start"/>.</summary>
-    public UpdateService(HttpClient? http = null)
+    public UpdateService()
+        : this(null, null, null, null)
+    {
+    }
+
+    /// <summary>
+    /// Builds the service over explicit parts. Tests supply a fake transport, their own key, staging in
+    /// a temporary protected directory, and an installer that records instead of running msiexec.
+    /// </summary>
+    internal UpdateService(
+        HttpClient? http, UpdateStaging? staging, IUpdateInstaller? installer, string? releaseKey)
     {
         _http = http ?? new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
         _http.DefaultRequestHeaders.UserAgent.ParseAdd($"SplitLane/{CurrentVersion}");
+        _staging = staging ?? new UpdateStaging();
+        _installer = installer ?? new MsiexecInstaller();
+        _releaseKey = releaseKey ?? ReleaseKey.PublicKeySpki;
     }
+
+    /// <summary>The version a check compares against. Tests set it; the service uses the build's.</summary>
+    internal ProductVersion InstalledVersion { get; init; } = CurrentVersion;
 
     /// <summary>The version this engine is.</summary>
     public static ProductVersion CurrentVersion { get; } = ReadCurrentVersion();
@@ -141,7 +158,7 @@ public sealed class UpdateService : IDisposable
             var signature = await FetchAsync(SignatureUrl, cancellationToken).ConfigureAwait(false);
 
             var rejection = ManifestVerifier.Verify(
-                manifestJson, signature, ReleaseKey.PublicKeySpki, out var manifest);
+                manifestJson, signature, _releaseKey, out var manifest);
 
             if (rejection != ManifestRejection.None || manifest is null)
             {
@@ -154,17 +171,17 @@ public sealed class UpdateService : IDisposable
 
             var offered = ProductVersion.Parse(manifest.Version);
 
-            if (!offered.IsNewerThan(CurrentVersion))
+            if (!offered.IsNewerThan(InstalledVersion))
             {
                 Available = null;
                 LastError = null;
-                SplitLaneLog.Debug(LogCategory, $"{CurrentVersion} is current; latest is {offered}");
+                SplitLaneLog.Debug(LogCategory, $"{InstalledVersion} is current; latest is {offered}");
                 return State = UpdateState.UpToDate;
             }
 
             Available = manifest;
             LastError = null;
-            SplitLaneLog.Info(LogCategory, $"{offered} is available; this is {CurrentVersion}");
+            SplitLaneLog.Info(LogCategory, $"{offered} is available; this is {InstalledVersion}");
             return State = UpdateState.Available;
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or IOException)
@@ -210,30 +227,35 @@ public sealed class UpdateService : IDisposable
         {
             State = UpdateState.Downloading;
 
-            var directory = Path.Combine(SplitLanePaths.Root, "updates");
-            Directory.CreateDirectory(directory);
+            // The name is built here from a version that parsed as digits and dots, never taken from
+            // the URL. It is cosmetic - the directory it lands in is new, random and SYSTEM-only.
+            var fileName = $"SplitLane-{ProductVersion.Parse(manifest.Version)}-x64.msi";
 
-            var installer = Path.Combine(directory, $"SplitLane-{manifest.Version}-x64.msi");
+            var staged = await _staging.StageAsync(
+                fileName,
+                (destination, token) => DownloadAsync(manifest.Url, destination, token),
+                manifest.Sha256,
+                cancellationToken).ConfigureAwait(false);
 
-            await DownloadAsync(manifest.Url, installer, cancellationToken).ConfigureAwait(false);
-
-            var actual = await HashAsync(installer, cancellationToken).ConfigureAwait(false);
-
-            if (!actual.Equals(manifest.Sha256, StringComparison.OrdinalIgnoreCase))
-            {
-                TryDelete(installer);
-                Fail("the downloaded installer does not match the hash the release was signed with");
-                return false;
-            }
+            // Checked again on a fresh handle, in place, immediately before it is handed over: the same
+            // file, still a regular file with one name, still writable only by SYSTEM/Administrators,
+            // still the hash the signed manifest names.
+            var verified = _staging.VerifyFinal(staged);
 
             SplitLaneLog.Info(LogCategory, $"installing {manifest.Version}");
             State = UpdateState.Installing;
 
-            Launch(installer);
+            _installer.Install(verified);
             return true;
         }
+        catch (StagingRejectedException ex)
+        {
+            Fail(ex.Message);
+            return false;
+        }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or IOException
-                                       or UnauthorizedAccessException)
+                                       or UnauthorizedAccessException or InvalidOperationException
+                                       or System.ComponentModel.Win32Exception)
         {
             Fail(ex.Message);
             return false;
@@ -266,54 +288,14 @@ public sealed class UpdateService : IDisposable
         return await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task DownloadAsync(string url, string destination, CancellationToken cancellationToken)
+    private async Task DownloadAsync(string url, Stream destination, CancellationToken cancellationToken)
     {
         using var response = await _http
-            .GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+            .GetAsync(new Uri(url), HttpCompletionOption.ResponseHeadersRead, cancellationToken)
             .ConfigureAwait(false);
 
         response.EnsureSuccessStatusCode();
-
-        // Written under a name nothing will run, then moved. A half-downloaded file that shares the
-        // name of a finished one is a file somebody's tooling will eventually try to install.
-        var partial = destination + ".part";
-
-        await using (var file = File.Create(partial))
-        {
-            await response.Content.CopyToAsync(file, cancellationToken).ConfigureAwait(false);
-        }
-
-        File.Move(partial, destination, overwrite: true);
-    }
-
-    private static async Task<string> HashAsync(string path, CancellationToken cancellationToken)
-    {
-        await using var stream = File.OpenRead(path);
-        var hash = await SHA256.HashDataAsync(stream, cancellationToken).ConfigureAwait(false);
-        return Convert.ToHexString(hash);
-    }
-
-    /// <summary>
-    /// Starts the installer as a detached process.
-    /// </summary>
-    /// <remarks>
-    /// Quiet, because there is nobody at the console of a service to answer a dialog, and because
-    /// the package already knows how to stop the service, replace the files and start it again.
-    /// </remarks>
-    private static void Launch(string installer)
-    {
-        using var process = Process.Start(new ProcessStartInfo
-        {
-            FileName = "msiexec.exe",
-            Arguments = $"/i \"{installer}\" /qn /norestart",
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        });
-
-        if (process is null)
-        {
-            SplitLaneLog.Error(LogCategory, "the installer could not be started");
-        }
+        await response.Content.CopyToAsync(destination, cancellationToken).ConfigureAwait(false);
     }
 
     private UpdateState Fail(string message)
@@ -321,17 +303,6 @@ public sealed class UpdateService : IDisposable
         LastError = message;
         SplitLaneLog.Warning(LogCategory, $"update check failed: {message}");
         return State = UpdateState.Failed;
-    }
-
-    private static void TryDelete(string path)
-    {
-        try
-        {
-            File.Delete(path);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-        }
     }
 
     /// <summary>

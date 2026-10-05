@@ -230,6 +230,12 @@ public sealed class ControlServer : IAsyncDisposable
                 // Nothing from the request reaches this. What gets installed was decided by a
                 // manifest the engine fetched and verified against the release key; the caller is
                 // only choosing when.
+                //
+                // Kept open to interactive users on purpose: the window that offers the update runs
+                // unelevated, and the only effect a caller has is "install the official release now"
+                // (a service restart). Choosing *what* is installed is impossible from here, and
+                // changing the package between verification and msiexec is closed separately by
+                // UpdateStaging (SL-SEC-001). A managed policy can still turn self-update off.
                 return await _runtime.Updates.ApplyAsync().ConfigureAwait(false)
                     ? EngineResponse.Ok
                     : EngineResponse.Failed(_runtime.Updates.LastError ?? "the update could not be applied");
