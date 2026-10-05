@@ -60,11 +60,16 @@ the SYN leaving un-redirected, the connection establishing with its real server,
 being rewritten and dropped.
 
 So a SYN with no decision waits for one, for up to eight milliseconds (`DivertPipeline`), and a
-connection is redirected only if its SYN was. A SYN whose wait times out is let through rather than
-dropped, because dropping it would break an application SplitLane was never asked to touch. If a
-PROXY decision then arrives for it, that connection has already established with its real
-destination; it is left alone and a warning is logged — a selected application's connection gone
-DIRECT, reported rather than silent. Across a full load run the wait timed out 0 times
+connection is redirected only if its SYN was. A SYN whose wait times out is **dropped whenever any
+rule could protect a flow** (SL-SEC-009): an undecided SYN may be a selected application's, and
+letting it through was a silent DIRECT. TCP retransmits the SYN about a second later, by when the
+decision is in. Only with no rule in force at all is a timed-out SYN let through. A PROXY decision
+that arrives for a connection whose SYN already got out (possible only if a rule appeared
+mid-connection) now terminates it rather than leaving it DIRECT. The same holds for UDP: a datagram
+from a socket whose BIND was not seen waits briefly, then its owner is looked up by port in the IP
+Helper table (which also covers sockets opened before the engine started), and if no owner can be
+established while anything could be protected, the datagram is dropped. Across a full load run the
+wait timed out 0 times
 (`tools/stress-divert.ps1`). DIRECT decisions are recorded too, so an unselected
 application's SYN finds its answer instead of waiting out the window — without that, every
 connection it opened paid the full wait (see [DEVELOPMENT.md](DEVELOPMENT.md), "What it costs an

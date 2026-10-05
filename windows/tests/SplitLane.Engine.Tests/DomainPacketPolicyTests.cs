@@ -56,7 +56,13 @@ public sealed class DomainPacketPolicyTests
         var dns = new DnsObserver();
         dns.Record(remote, protectedDestination ? "api.example.com" : "unrelated.test");
         var engine = Engine(RouteAction.ProxyOnly);
-        await using var pipeline = new DivertPipeline(new NatTable(), dns, new ProcessResolver(), new EngineStatistics(), () => engine);
+
+        // No BIND was seen for the socket; its owner is found the way the engine finds it, by port. An
+        // unidentifiable owner: unrelated traffic must still flow, the protected destination must not.
+        await using var pipeline = new DivertPipeline(new NatTable(), dns, new ProcessResolver(), new EngineStatistics(), () => engine)
+        {
+            UdpOwnerLookup = (_, _) => new UdpEndpointOwner(0x7FFFFFF0, DualStack: false),
+        };
         var packet = Packet(source, remote, true);
         var address = new WinDivertAddress { Outbound = true, IPv6 = ipv6 };
 

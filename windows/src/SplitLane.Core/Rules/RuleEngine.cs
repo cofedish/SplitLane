@@ -236,6 +236,17 @@ public sealed class RuleSnapshot
     /// <summary>Number of rules that can route traffic, managed ones included. Diagnostic only.</summary>
     public int ActiveRuleCount => _activeRules + (_managed?.ActiveRuleCount ?? 0) + (Domains?.Count ?? 0);
 
+    /// <summary>
+    /// Whether any flow could be decided anything but DIRECT: routing is on and at least one rule -
+    /// user, managed or destination - is in force.
+    /// </summary>
+    /// <remarks>
+    /// Conservative on purpose (a rule whose action is Direct still counts). It answers "may an
+    /// undecided packet belong to a protected application?", and when it might, the packet waits or is
+    /// dropped rather than sent DIRECT (SL-SEC-009). When nothing could be protected, nothing is held.
+    /// </remarks>
+    public bool MayProtectTraffic => IsRoutingEnabled && ActiveRuleCount > 0;
+
     /// <summary>Number of managed rules in force. Diagnostic only.</summary>
     public int ManagedRuleCount => _managed?.ActiveRuleCount ?? 0;
 

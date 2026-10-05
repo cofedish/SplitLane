@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using SplitLane.Core.Logging;
 using SplitLane.Core.Models;
 using SplitLane.Core.Proxy.Socks5;
@@ -99,15 +100,31 @@ public sealed class DivertPipeline : IAsyncDisposable
     private const uint LoopbackInterfaceIndex = 1;
 
     /// <summary>
-    /// How long a SYN waits for its routing decision before being let through.
+    /// How long a SYN, or the first datagram of an unknown UDP socket, waits for its routing decision.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Long enough to absorb the scheduling gap between two threads, short enough that a connection
-    /// SplitLane has no interest in is delayed imperceptibly. Letting it through on timeout rather
-    /// than dropping it is deliberate: a dropped SYN breaks an application SplitLane was never asked
-    /// to touch, which is a worse failure than a missed redirect.
+    /// SplitLane has no interest in is delayed imperceptibly.
+    /// </para>
+    /// <para>
+    /// What happens on timeout used to depend on luck: the SYN was let through, on the reasoning that a
+    /// dropped SYN breaks an application SplitLane was never asked to touch. But "not decided" may be a
+    /// selected application, and letting it through is exactly the silent DIRECT the product exists to
+    /// prevent (SL-SEC-009). So whenever any rule could protect a flow
+    /// (<see cref="RuleSnapshot.MayProtectTraffic"/>), an undecided SYN is dropped - TCP sends it again a
+    /// second later, by when the decision is in - and only when nothing could be protected is it
+    /// forwarded.
+    /// </para>
     /// </remarks>
     private const int DecisionWaitMilliseconds = 8;
+
+    /// <summary>How long a failed owner lookup for a UDP port is remembered.</summary>
+    /// <remarks>
+    /// The table lookup is not free; a socket whose owner cannot be found would otherwise repeat it for
+    /// every datagram. While remembered, such datagrams are dropped if anything could be protected.
+    /// </remarks>
+    private static readonly long UnknownOwnerLifetimeTicks = Stopwatch.Frequency;
 
     private readonly NatTable _nat;
     private readonly DnsObserver _dns;
@@ -134,6 +151,16 @@ public sealed class DivertPipeline : IAsyncDisposable
     private readonly ConcurrentDictionary<FlowKey, PendingConnection> _pendingTcp = new();
     private readonly ConcurrentDictionary<PortSlot, PendingBind> _pendingUdp = new();
     private readonly Lock _udpGate = new();
+
+    /// <summary>
+    /// UDP sockets whose BIND was seen (or whose owner was looked up), by family and port, with the
+    /// socket that bound. Only a socket on this list has a known owner; a datagram from anything else is
+    /// undecided, not DIRECT (SL-SEC-009). Bounded by the port space.
+    /// </summary>
+    private readonly ConcurrentDictionary<PortSlot, ulong> _udpSeen = new();
+
+    /// <summary>Ports whose owner lookup failed, and when, so it is not repeated per datagram.</summary>
+    private readonly ConcurrentDictionary<PortSlot, long> _udpUnknownOwner = new();
     private UdpRelay? _udpRelay;
     private UdpLanePool? _lanePool;
 
@@ -157,6 +184,7 @@ public sealed class DivertPipeline : IAsyncDisposable
     private long _released;
     private long _heldPacketsDropped;
     private long _refusedPacketsDropped;
+    private long _undecidedDropped;
     private Timer? _heartbeat;
     private DivertHandle? _traceHandle;
     private Thread? _traceThread;
@@ -199,6 +227,15 @@ public sealed class DivertPipeline : IAsyncDisposable
 
     /// <summary>Connections and sockets currently held for verification. Diagnostic.</summary>
     public int HeldCount => _pendingTcp.Count + _pendingUdp.Count;
+
+    /// <summary>
+    /// Finds the owner of a UDP port that produced no BIND event. The table lookup by default; tests
+    /// supply their own.
+    /// </summary>
+    public Func<bool, ushort, UdpEndpointOwner?> UdpOwnerLookup { get; init; } = UdpEndpointOwners.Find;
+
+    /// <summary>Packets dropped because no decision existed yet and one could have protected them.</summary>
+    public long UndecidedDropped => Interlocked.Read(ref _undecidedDropped);
 
     /// <summary>
     /// Raised once, on the failing thread, when the socket pump or the packet loop can no longer do its
@@ -325,6 +362,19 @@ public sealed class DivertPipeline : IAsyncDisposable
             SocketFilter, WinDivertLayer.Socket, priority: 0,
             WinDivertFlags.Sniff | WinDivertFlags.RecvOnly);
 
+        // A socket event that waits in a shallow queue is a decision that arrives after its packet
+        // (SL-SEC-009). The same depth as the network handle; a driver that refuses it leaves the
+        // default, which is how this ran before, and says so.
+        try
+        {
+            _socketHandle.SetParam(WinDivertParam.QueueLength, 8192);
+            _socketHandle.SetParam(WinDivertParam.QueueTime, 2000);
+        }
+        catch (DivertException ex)
+        {
+            SplitLaneLog.Warning(LogCategory, $"the socket layer keeps its default queue: {ex.Message}");
+        }
+
         var major = _socketHandle.GetParam(WinDivertParam.VersionMajor);
         var minor = _socketHandle.GetParam(WinDivertParam.VersionMinor);
         DriverVersion = major is not null && minor is not null ? $"{major}.{minor}" : null;
@@ -415,7 +465,8 @@ public sealed class DivertPipeline : IAsyncDisposable
                 $"held now {HeldCount}, held {Interlocked.Read(ref _held)}, " +
                 $"released {Interlocked.Read(ref _released)}, " +
                 $"held drops {Interlocked.Read(ref _heldPacketsDropped)}, " +
-                $"refused drops {Interlocked.Read(ref _refusedPacketsDropped)}"),
+                $"refused drops {Interlocked.Read(ref _refusedPacketsDropped)}, " +
+                $"undecided drops {Interlocked.Read(ref _undecidedDropped)}"),
             null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
 
         SplitLaneLog.Info(
@@ -543,6 +594,11 @@ public sealed class DivertPipeline : IAsyncDisposable
     {
         lock (_udpGate)
         {
+            if (_udpSeen.TryGetValue(slot, out var seen) && OwnedBy(seen, endpointId))
+            {
+                _udpSeen.TryRemove(new KeyValuePair<PortSlot, ulong>(slot, seen));
+            }
+
             if (_pendingUdp.TryGetValue(slot, out var pending) && OwnedBy(pending.EndpointId, endpointId))
             {
                 _pendingUdp.TryRemove(new KeyValuePair<PortSlot, PendingBind>(slot, pending));
@@ -589,16 +645,28 @@ public sealed class DivertPipeline : IAsyncDisposable
         var slot = new PortSlot(address.IPv6, socket.LocalPort);
         var dualStack = address.IPv6 && SocketAddressReader.ReadLocal(address).Equals(IPAddress.IPv6Any);
 
-        if (socket.ProcessId == _selfProcessId)
+        // Seen, whoever owns it: from here on its datagrams are decided, not undecided.
+        _udpSeen[slot] = socket.EndpointId;
+        _udpUnknownOwner.TryRemove(slot, out _);
+
+        DecideUdpSocket(slot, socket.ProcessId, socket.EndpointId, dualStack);
+    }
+
+    /// <summary>Decides a UDP socket from its owner, as its BIND event (or an owner lookup) reports it.</summary>
+    private void DecideUdpSocket(PortSlot slot, uint processId, ulong endpointId, bool dualStack)
+    {
+        _udpSeen[slot] = endpointId;
+
+        if (processId == _selfProcessId)
         {
             _udpFlows[slot] = new UdpFlow(
-                new FlowDescriptor(socket.ProcessId, string.Empty, null, 0, FlowProtocol.Udp, IsEngineTraffic: true),
-                socket.EndpointId,
+                new FlowDescriptor(processId, string.Empty, null, 0, FlowProtocol.Udp, IsEngineTraffic: true),
+                endpointId,
                 dualStack);
             return;
         }
 
-        var info = _processes.ResolveInfo(socket.ProcessId);
+        var info = _processes.ResolveInfo(processId);
         if (info.IsUnknown && _engine().Snapshot.DomainsCount == 0)
         {
             return;
@@ -610,7 +678,7 @@ public sealed class DivertPipeline : IAsyncDisposable
         // never needs a lookup, and a map of every UDP socket on the machine would be both larger and
         // a description of what the user is doing.
         var flow = new FlowDescriptor(
-            socket.ProcessId, info.ExecutablePath, "203.0.113.1", 0, FlowProtocol.Udp,
+            processId, info.ExecutablePath, "203.0.113.1", 0, FlowProtocol.Udp,
             Image: EvidenceFor(info, engine));
 
         var decision = engine.Decide(flow);
@@ -618,11 +686,11 @@ public sealed class DivertPipeline : IAsyncDisposable
 
         var recorded = RecordUdpDecision(
             slot,
-            socket.EndpointId,
+            endpointId,
             dualStack,
             flow,
             held ? RouteAction.Block : decision.Action,
-            held ? new PendingBind(flow, info.Image!, info.PackageFamilyName, socket.EndpointId, dualStack) : null);
+            held ? new PendingBind(flow, info.Image!, info.PackageFamilyName, endpointId, dualStack) : null);
 
         if (recorded && held)
         {
@@ -647,6 +715,7 @@ public sealed class DivertPipeline : IAsyncDisposable
             }
 
             _udpFlows[slot] = new UdpFlow(flow, endpointId, dualStack);
+            _udpSeen[slot] = endpointId;
 
             if (pending is not null)
             {
@@ -1122,9 +1191,12 @@ public sealed class DivertPipeline : IAsyncDisposable
         if (view.IsTcpSyn && !HasDecision(key, view))
         {
             WaitForDecision(key, view);
-            // Destination policies must not fail open when the socket pump misses its deadline.
-            if (!HasDecision(key, view) && _engine().Snapshot.DomainsCount > 0)
+
+            // Still undecided: it may be a selected application. Dropped whenever anything could be
+            // protected (SL-SEC-009) - the SYN is sent again, and meets its decision then.
+            if (!HasDecision(key, view) && _engine().Snapshot.MayProtectTraffic)
             {
+                Interlocked.Increment(ref _undecidedDropped);
                 return PacketAction.Drop;
             }
         }
@@ -1163,23 +1235,21 @@ public sealed class DivertPipeline : IAsyncDisposable
             }
             else if (!entry.SynRedirected)
             {
-                if (entry.Action == RouteAction.ProxyOnly)
-                {
-                    // A strict decision arriving after SYN must terminate the flow, not preserve
-                    // an established direct connection. The application can retry through the lane.
-                    Interlocked.Increment(ref _refusedPacketsDropped);
-                    return PacketAction.Drop;
-                }
-
+                // A proxy decision that arrived after its SYN got out. Leaving the connection to run
+                // DIRECT used to be the answer for Proxy (only ProxyOnly was terminated); it is now
+                // terminated for both (SL-SEC-009). The application retries, and the retry is
+                // redirected. Undecided SYNs are no longer let out while anything could be protected,
+                // so this is reached only when a rule appeared mid-connection.
                 if (Interlocked.Increment(ref _lateDecisions) is 1 or 50)
                 {
                     SplitLaneLog.Warning(
                         LogCategory,
                         $"connection from port {view.SourcePort} was established before its routing " +
-                        "decision was recorded, so it is being left alone rather than broken");
+                        "decision was recorded; it is refused rather than left DIRECT");
                 }
 
-                return PacketAction.Forward;
+                Interlocked.Increment(ref _refusedPacketsDropped);
+                return PacketAction.Drop;
             }
 
             if (RedirectRewriter.TryRedirectToListener(packet, _listenerPort, UseLoopbackRedirect))
@@ -1247,6 +1317,20 @@ public sealed class DivertPipeline : IAsyncDisposable
         IPAddress? destination = null;
         RouteDecision resolved = RouteDecision.DirectDefault;
         var slot = new PortSlot(view.IsIPv6, view.SourcePort);
+
+        // A socket nobody has decided about yet - its BIND still in the socket queue, or opened before
+        // the engine started - is undecided, not DIRECT (SL-SEC-009).
+        if (!IsUdpSeen(slot) && !TryDecideUnseenUdp(slot, engine))
+        {
+            if (engine.Snapshot.MayProtectTraffic)
+            {
+                Interlocked.Increment(ref _undecidedDropped);
+                return PacketAction.Drop;
+            }
+
+            return PacketAction.Forward;
+        }
+
         var hasOwner = TryGetUdpOwner(slot, out var selected);
         var action = hasOwner ? selected.Action : RouteAction.Direct;
         if (engine.Snapshot.DomainsCount > 0)
@@ -1316,6 +1400,82 @@ public sealed class DivertPipeline : IAsyncDisposable
 
         _statistics.CountBlocked();
         return PacketAction.Drop;
+    }
+
+    private bool IsUdpSeen(PortSlot slot) =>
+        _udpSeen.ContainsKey(slot) ||
+        (!slot.IPv6 && _udpFlows.TryGetValue(slot with { IPv6 = true }, out var wildcard) && wildcard.DualStack);
+
+    /// <summary>
+    /// Gives an unseen UDP socket a decision: first by waiting briefly for its BIND, then by asking the
+    /// IP Helper table who owns the port and deciding as a BIND would have.
+    /// </summary>
+    /// <returns>Whether the socket now has a known owner and a recorded decision.</returns>
+    private bool TryDecideUnseenUdp(PortSlot slot, RuleEngine engine)
+    {
+        if (!engine.Snapshot.MayProtectTraffic && engine.Snapshot.DomainsCount == 0)
+        {
+            // Nothing could be decided anything but DIRECT; no lookup is worth its cost.
+            return false;
+        }
+
+        WaitForUdpBind(slot);
+        if (IsUdpSeen(slot))
+        {
+            return true;
+        }
+
+        var now = Stopwatch.GetTimestamp();
+        if (_udpUnknownOwner.TryGetValue(slot, out var failedAt) && now - failedAt < UnknownOwnerLifetimeTicks)
+        {
+            return false;
+        }
+
+        UdpEndpointOwner? owner;
+        try
+        {
+            owner = UdpOwnerLookup(slot.IPv6, slot.Port);
+        }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException or SEHException)
+        {
+            owner = null;
+        }
+
+        if (owner is not { } found)
+        {
+            _udpUnknownOwner[slot] = now;
+            return false;
+        }
+
+        DecideUdpSocket(found.DualStack ? slot with { IPv6 = true } : slot, found.ProcessId, endpointId: 0, found.DualStack);
+        return IsUdpSeen(slot);
+    }
+
+    /// <summary>Waits briefly for a UDP socket's BIND to be recorded.</summary>
+    private void WaitForUdpBind(PortSlot slot)
+    {
+        var deadline = Stopwatch.GetTimestamp() + (Stopwatch.Frequency * DecisionWaitMilliseconds / 1000);
+        var spins = 0;
+
+        while (Stopwatch.GetTimestamp() < deadline)
+        {
+            if (IsUdpSeen(slot))
+            {
+                Interlocked.Increment(ref _decisionsWaitedFor);
+                return;
+            }
+
+            if (++spins % 8 == 0)
+            {
+                Thread.Sleep(0);
+            }
+            else
+            {
+                Thread.SpinWait(64);
+            }
+        }
+
+        Interlocked.Increment(ref _decisionTimeouts);
     }
 
     /// <summary>
@@ -1541,6 +1701,8 @@ public sealed class DivertPipeline : IAsyncDisposable
 
         _udpPortOwners.Clear();
         _udpFlows.Clear();
+        _udpSeen.Clear();
+        _udpUnknownOwner.Clear();
         _udpOrigins.Clear();
         _pendingTcp.Clear();
         _pendingUdp.Clear();
