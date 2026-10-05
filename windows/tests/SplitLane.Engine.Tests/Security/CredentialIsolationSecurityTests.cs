@@ -136,6 +136,28 @@ public sealed class CredentialIsolationSecurityTests : IDisposable
     }
 
     [Fact]
+    public void An_old_file_with_a_second_name_is_not_read_but_is_deleted()
+    {
+        // A hard link would make the service read whatever the other name points at.
+        var other = Path.Combine(_root, "somewhere-else.bin");
+        File.WriteAllBytes(other, ProtectedData.Protect(Encoding.UTF8.GetBytes(Password), null, DataProtectionScope.LocalMachine));
+        var legacy = Path.Combine(_root, "credential.bin");
+        Assert.True(CreateHardLink(legacy, other, 0));
+
+        var store = Store();
+        Assert.False(store.MigrateLegacy(legacy, Proxy()));
+
+        Assert.False(File.Exists(legacy));
+        Assert.True(File.Exists(other));
+        Assert.Null(store.Binding);
+    }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", EntryPoint = "CreateHardLinkW", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
+    [System.Runtime.InteropServices.DefaultDllImportSearchPaths(System.Runtime.InteropServices.DllImportSearchPath.System32)]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static extern bool CreateHardLink(string fileName, string existingFileName, nint securityAttributes);
+
+    [Fact]
     public void An_old_file_with_no_account_to_bind_it_to_is_deleted_anyway()
     {
         var legacy = Path.Combine(_root, "credential.bin");

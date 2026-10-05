@@ -58,6 +58,9 @@ public sealed class ProxyProbeSecurityTests : IDisposable
         Assert.False(first.Succeeded);
         Assert.False(second.Succeeded);
         Assert.Contains("Wait a moment", second.Detail, StringComparison.Ordinal);
+
+        // The status every interactive user can read says no more than the test result did.
+        Assert.Equal(first.Detail, runtime.Status().LastError);
     }
 
     private EngineRuntime Runtime() => new(

@@ -60,7 +60,7 @@ public sealed class UpdateService : IDisposable
     /// than configuration: a settable update feed is a settable answer to "is this ours".
     /// </remarks>
     private const string ManifestUrl =
-        "https://github.com/cofedish/SplitLane/releases/latest/download/update.json";
+        "https://github.com/" + ManifestVerifier.ReleaseRepository + "/releases/latest/download/update.json";
 
     private const string SignatureUrl = ManifestUrl + ".sig";
 

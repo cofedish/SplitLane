@@ -808,6 +808,7 @@ public sealed class EngineRuntime : IAsyncDisposable
             RoutingLockedByPolicy = IsRoutingLockedByPolicy,
             ProxyCredentialFor = _store.Credentials.Binding?.Display,
             ProxyCredentialInUse = _credential is not null,
+            ProxyCredentialAllowsBasic = _store.Credentials.AllowsPlaintextBasic,
         };
     }
 
@@ -889,14 +890,19 @@ public sealed class EngineRuntime : IAsyncDisposable
         catch (UpstreamProxyException ex)
         {
             SplitLaneLog.Warning(LogCategory, $"proxy test: {ex.Describe()}");
-            _lastError = ex.Message;
-            return new ProxyTestResult(false, null, CoarseFailure(ex));
+
+            // Status is readable by every interactive user too: the same coarse text, never the far
+            // end's words (SL-SEC-019, review).
+            var coarse = CoarseFailure(ex);
+            _lastError = coarse;
+            return new ProxyTestResult(false, null, coarse);
         }
         catch (Exception ex)
         {
             SplitLaneLog.Warning(LogCategory, $"proxy test: {ex.GetType().Name}: {ex.Message}");
-            _lastError = ex.Message;
-            return new ProxyTestResult(false, null, "The proxy test failed; the engine log has the detail.");
+            const string failed = "The proxy test failed; the engine log has the detail.";
+            _lastError = failed;
+            return new ProxyTestResult(false, null, failed);
         }
     }
 

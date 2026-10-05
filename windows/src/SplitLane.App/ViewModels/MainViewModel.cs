@@ -477,6 +477,8 @@ public sealed class MainViewModel : ObservableObject
 
             if (credentialProblem is not null)
             {
+                // The rest was saved; the password was not. Still unsaved, so Save stays available.
+                HasUnsavedChanges = true;
                 SetBanner(credentialProblem, isError: true);
                 return;
             }

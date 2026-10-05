@@ -1,29 +1,30 @@
 <Project>
 
   <!--
-    The .NET runtime a self-contained publish carries (SL-SEC-012).
+    The lowest .NET runtime patch a self-contained publish may carry (SL-SEC-012).
 
-    A self-contained publish bundles the runtime pack the SDK it was built with knows as the latest,
-    so the runtime's patch level used to depend on whichever SDK the building machine happened to
-    have. A package built with an SDK that bundled 10.0.10 shipped seven runtime CVEs fixed in
-    10.0.11 (Trivy; FINDINGS.md SL-SEC-012) while the CI build, on a newer SDK, did not.
+    A self-contained publish bundles the runtime pack its SDK knows as the latest, so the runtime's
+    patch level used to depend on whichever SDK the building machine happened to have. A package
+    built with an SDK that bundled 10.0.10 shipped seven runtime CVEs fixed in 10.0.11 (Trivy;
+    FINDINGS.md SL-SEC-012) while the CI build, on a newer SDK, did not.
 
-    Pinned here to a patch with no known vulnerabilities. Raise it with each .NET security release;
-    never lower it. tools/build-installer.ps1 refuses a publish whose runtime is older.
+    A floor, not a pin: an SDK that already knows a newer patch keeps it. Raised only for net10.0,
+    the one framework built here. Raise the value with each .NET security release; never lower it.
+    tools/build-installer.ps1 refuses a publish whose runtime is older.
   -->
   <PropertyGroup>
     <SplitLaneMinimumRuntimePatch>10.0.12</SplitLaneMinimumRuntimePatch>
   </PropertyGroup>
 
-  <ItemGroup>
-    <KnownFrameworkReference Update="Microsoft.NETCore.App"
-                             LatestRuntimeFrameworkVersion="$(SplitLaneMinimumRuntimePatch)" />
-    <KnownFrameworkReference Update="Microsoft.WindowsDesktop.App"
-                             LatestRuntimeFrameworkVersion="$(SplitLaneMinimumRuntimePatch)" />
-    <KnownFrameworkReference Update="Microsoft.WindowsDesktop.App.WPF"
-                             LatestRuntimeFrameworkVersion="$(SplitLaneMinimumRuntimePatch)" />
-    <KnownFrameworkReference Update="Microsoft.WindowsDesktop.App.WindowsForms"
-                             LatestRuntimeFrameworkVersion="$(SplitLaneMinimumRuntimePatch)" />
-  </ItemGroup>
+  <Target Name="SplitLaneRaiseRuntimePatch" BeforeTargets="ProcessFrameworkReferences">
+    <ItemGroup>
+      <KnownFrameworkReference Update="@(KnownFrameworkReference)"
+                               Condition="'%(KnownFrameworkReference.TargetFramework)' == 'net10.0' and
+                                          ('%(Identity)' == 'Microsoft.NETCore.App' or '%(Identity)' == 'Microsoft.WindowsDesktop.App' or
+                                           '%(Identity)' == 'Microsoft.WindowsDesktop.App.WPF' or '%(Identity)' == 'Microsoft.WindowsDesktop.App.WindowsForms') and
+                                          $([System.Version]::Parse('%(KnownFrameworkReference.LatestRuntimeFrameworkVersion)').CompareTo($([System.Version]::Parse('$(SplitLaneMinimumRuntimePatch)')))) &lt; 0"
+                               LatestRuntimeFrameworkVersion="$(SplitLaneMinimumRuntimePatch)" />
+    </ItemGroup>
+  </Target>
 
 </Project>

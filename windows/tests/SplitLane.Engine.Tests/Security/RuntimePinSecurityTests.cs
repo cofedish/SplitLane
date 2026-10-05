@@ -20,8 +20,11 @@ public sealed partial class RuntimePinSecurityTests
 
         Assert.True(pinned.Success, "Directory.Build.targets no longer pins SplitLaneMinimumRuntimePatch");
         Assert.True(Version.Parse(pinned.Groups[1].Value) >= FirstClean);
-        Assert.Contains("KnownFrameworkReference Update=\"Microsoft.NETCore.App\"", targets, StringComparison.Ordinal);
-        Assert.Contains("KnownFrameworkReference Update=\"Microsoft.WindowsDesktop.App\"", targets, StringComparison.Ordinal);
+        // A floor applied to the runtime packs of the framework built here; never a lower pin.
+        Assert.Contains("BeforeTargets=\"ProcessFrameworkReferences\"", targets, StringComparison.Ordinal);
+        Assert.Contains("'Microsoft.NETCore.App'", targets, StringComparison.Ordinal);
+        Assert.Contains("'Microsoft.WindowsDesktop.App'", targets, StringComparison.Ordinal);
+        Assert.Contains(".CompareTo(", targets, StringComparison.Ordinal);
     }
 
     [Fact]

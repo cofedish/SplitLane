@@ -12,6 +12,7 @@ public sealed class ReleaseSourceSecurityTests
     [Theory]
     [InlineData("https://github.com/cofedish/SplitLane/releases/download/v0.13.0/SplitLane-0.13.0-x64.msi", true)]
     [InlineData("https://GITHUB.com/cofedish/SplitLane/releases/download/v0.13.0/x.msi", true)]
+    [InlineData("https://github.com/Cofedish/splitlane/releases/download/v0.13.0/x.msi", true)]     // GitHub ignores case
     [InlineData("https://github.com/someone-else/SplitLane/releases/download/v9/x.msi", false)]   // another repository
     [InlineData("https://github.com/cofedish/SplitLane/archive/refs/tags/v9.zip", false)]         // not a release asset
     [InlineData("https://gist.github.com/cofedish/SplitLane/releases/download/v9/x.msi", false)]  // another GitHub host

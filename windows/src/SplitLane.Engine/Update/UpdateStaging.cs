@@ -250,7 +250,7 @@ public sealed class UpdateStaging
         {
             if (rule.AccessControlType == AccessControlType.Allow &&
                 !_trusted.Contains(rule.IdentityReference.Value) &&
-                (rule.FileSystemRights & Modifying) != 0)
+                ((rule.FileSystemRights & Modifying) != 0 || ((int)rule.FileSystemRights & (0x10000000 | 0x40000000)) != 0))
             {
                 throw new StagingRejectedException($"{rule.IdentityReference.Value} can modify the package");
             }
@@ -266,14 +266,21 @@ public sealed class UpdateStaging
         return staged;
     }
 
-    /// <summary>Removes earlier stages. Best effort: a package msiexec still holds is left for next time.</summary>
+    /// <summary>
+    /// Removes earlier stages but the newest, which holds the package the installed product came from
+    /// - Windows Installer may need it again for a repair. Best effort.
+    /// </summary>
     private void RemoveStaleStages()
     {
         var root = _root.Ensure();
 
-        foreach (var stale in Directory.EnumerateDirectories(root, "stage-*"))
+        var stages = new DirectoryInfo(root).EnumerateDirectories("stage-*")
+            .OrderByDescending(stage => stage.CreationTimeUtc)
+            .Skip(1);
+
+        foreach (var stale in stages)
         {
-            TryDeleteDirectory(stale);
+            TryDeleteDirectory(stale.FullName);
         }
     }
 

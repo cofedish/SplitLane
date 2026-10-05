@@ -143,8 +143,15 @@ public static class ManifestVerifier
         }
     }
 
+    /// <summary>The repository releases are published from, as GitHub names it: <c>owner/repo</c>.</summary>
+    /// <remarks>
+    /// The one place the feed and the accepted installer location come from (the engine's manifest URL
+    /// is built from it too). A product built from another repository changes it here, once.
+    /// </remarks>
+    public const string ReleaseRepository = "cofedish/SplitLane";
+
     /// <summary>Where this project's release assets are published. Nothing else is fetched.</summary>
-    public const string ReleasePathPrefix = "/cofedish/SplitLane/releases/download/";
+    public const string ReleasePathPrefix = "/" + ReleaseRepository + "/releases/download/";
 
     /// <summary>
     /// Whether the installer URL is one this build is willing to fetch.
@@ -162,7 +169,8 @@ public static class ManifestVerifier
         uri.IsDefaultPort &&
         string.IsNullOrEmpty(uri.UserInfo) &&
         uri.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase) &&
-        uri.AbsolutePath.StartsWith(ReleasePathPrefix, StringComparison.Ordinal) &&
+        // GitHub treats owner and repository names case-insensitively, and so does this.
+        uri.AbsolutePath.StartsWith(ReleasePathPrefix, StringComparison.OrdinalIgnoreCase) &&
         !uri.AbsolutePath.Contains("/../", StringComparison.Ordinal);
 
     private static bool IsSha256(string? hex)

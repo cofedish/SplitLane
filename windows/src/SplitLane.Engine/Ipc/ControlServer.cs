@@ -35,6 +35,9 @@ public sealed class ControlServer : IAsyncDisposable
 {
     private const string LogCategory = "ipc";
 
+    /// <summary>How long a connected client has to send its request.</summary>
+    private static readonly TimeSpan RequestReadTimeout = TimeSpan.FromSeconds(5);
+
     private readonly EngineRuntime _runtime;
     private readonly ConfigurationStore _store;
     private readonly CancellationTokenSource _stopping = new();
@@ -72,7 +75,19 @@ public sealed class ControlServer : IAsyncDisposable
                     await pipe.WaitForConnectionAsync(cancellationToken).ConfigureAwait(false);
 
                     var connected = pipe;
-                    pipe = CreatePipe(firstInstance: false);
+                    pipe = null;
+
+                    try
+                    {
+                        pipe = CreatePipe(firstInstance: false);
+                    }
+                    catch
+                    {
+                        // No next instance: drop this connection too, and claim the name afresh on the
+                        // next pass rather than waiting again on a pipe that is already connected.
+                        await connected.DisposeAsync().ConfigureAwait(false);
+                        throw;
+                    }
 
                     try
                     {
@@ -170,7 +185,22 @@ public sealed class ControlServer : IAsyncDisposable
 
     private async Task ServeAsync(NamedPipeServerStream pipe, CancellationToken cancellationToken)
     {
-        var payload = await ReadFrameAsync(pipe, cancellationToken).ConfigureAwait(false);
+        // One request, promptly: the channel serves one client at a time, so a caller that connects and
+        // sends nothing must not hold it for everyone else.
+        byte[]? payload;
+        using (var reading = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+        {
+            reading.CancelAfter(RequestReadTimeout);
+            try
+            {
+                payload = await ReadFrameAsync(pipe, reading.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                SplitLaneLog.Debug(LogCategory, "a client connected and sent no request in time");
+                return;
+            }
+        }
         if (payload is null)
         {
             return;

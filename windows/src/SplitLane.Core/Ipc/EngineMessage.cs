@@ -290,6 +290,9 @@ public sealed record EngineStatus
     /// <summary>Whether the stored password matches the proxy in force and is being used.</summary>
     public bool ProxyCredentialInUse { get; init; }
 
+    /// <summary>Whether the user allowed the stored password to be sent with HTTP Basic (SL-SEC-011).</summary>
+    public bool ProxyCredentialAllowsBasic { get; init; }
+
     /// <summary>How long the engine has been diverting.</summary>
     [JsonIgnore]
     public TimeSpan? Uptime => StartedAt is { } started ? DateTimeOffset.UtcNow - started : null;

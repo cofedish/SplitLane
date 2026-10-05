@@ -148,6 +148,9 @@ public sealed class ProxyCredentialStore
     /// <summary>What the stored password is for, or null when there is none. Never the password.</summary>
     public ProxyCredentialBinding? Binding => Read()?.Binding;
 
+    /// <summary>Whether the stored password may be sent with HTTP Basic to a proxy elsewhere.</summary>
+    public bool AllowsPlaintextBasic => Read()?.AllowPlaintextBasic ?? false;
+
     /// <summary>
     /// The credential for a proxy - only if a password is stored for exactly that protocol, host, port
     /// and account.
@@ -206,10 +209,10 @@ public sealed class ProxyCredentialStore
 
         try
         {
-            if (Binding is null && ProxyCredentialBinding.For(current) is { } binding && new FileInfo(legacyPath).Length <= MaxFileBytes)
+            if (Binding is null && ProxyCredentialBinding.For(current) is { } binding && ReadLegacy(legacyPath) is { } blob)
             {
                 var password = Encoding.UTF8.GetString(
-                    ProtectedData.Unprotect(File.ReadAllBytes(legacyPath), null, DataProtectionScope.LocalMachine));
+                    ProtectedData.Unprotect(blob, null, DataProtectionScope.LocalMachine));
                 Save(binding, password);
                 migrated = true;
             }
@@ -238,6 +241,29 @@ public sealed class ProxyCredentialStore
                   "local user before, so consider changing it"
                 : "an old proxy password file, readable by every local user, was deleted");
         return migrated;
+    }
+
+    /// <summary>
+    /// The old file's bytes, read through one handle that is checked to be a regular file with a
+    /// single name - not a link to something else - and not oversized. Null otherwise.
+    /// </summary>
+    private static byte[]? ReadLegacy(string path)
+    {
+        if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+        {
+            return null;
+        }
+
+        using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        if (!Platform.ImageInspectionNative.GetFileInformationByHandle(file.SafeFileHandle, out var information) ||
+            (information.FileAttributes & 0x400) != 0 || information.NumberOfLinks != 1 || file.Length > MaxFileBytes)
+        {
+            return null;
+        }
+
+        var blob = new byte[file.Length];
+        file.ReadExactly(blob);
+        return blob;
     }
 
     private bool Trusted()

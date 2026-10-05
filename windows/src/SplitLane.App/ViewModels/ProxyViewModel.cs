@@ -104,6 +104,7 @@ public sealed class ProxyViewModel : ObservableObject
         {
             if (Set(ref _allowPlaintextBasic, value))
             {
+                _main.MarkDirty();
                 Raise(nameof(CredentialStatus));
             }
         }
@@ -241,6 +242,11 @@ public sealed class ProxyViewModel : ObservableObject
                 return "A new password will be stored when you save.";
             }
 
+            if (AllowPlaintextBasicVisible && AllowPlaintextBasic != (_main.Status?.ProxyCredentialAllowsBasic ?? false))
+            {
+                return "Type the password again to change whether Basic is allowed; the choice is stored with it.";
+            }
+
             if (!_main.EngineConnected)
             {
                 return "The SplitLane service keeps the password, and it is not running.";
@@ -344,7 +350,17 @@ public sealed class ProxyViewModel : ObservableObject
     }
 
     /// <summary>Re-reads what the service says about the stored password.</summary>
-    public void OnStatusChanged() => Raise(nameof(CredentialStatus));
+    public void OnStatusChanged()
+    {
+        // The Basic choice shown is the stored one until the user changes it.
+        if (!_main.HasUnsavedChanges && _main.Status is { } status && _allowPlaintextBasic != status.ProxyCredentialAllowsBasic)
+        {
+            _allowPlaintextBasic = status.ProxyCredentialAllowsBasic;
+            Raise(nameof(AllowPlaintextBasic));
+        }
+
+        Raise(nameof(CredentialStatus));
+    }
 
     /// <summary>
     /// Hands a typed password to the service, bound to the proxy and account on this page.
@@ -372,7 +388,7 @@ public sealed class ProxyViewModel : ObservableObject
 
         if (!reply.Succeeded)
         {
-            return $"The password was not stored: {reply.Message ?? "the SplitLane service refused it"}. " +
+            return $"The password was not stored: {(reply.Message ?? "the SplitLane service refused it").TrimEnd('.')}. " +
                    "The service keeps it, so it must be running.";
         }
 
