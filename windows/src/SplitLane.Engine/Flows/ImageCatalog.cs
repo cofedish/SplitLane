@@ -87,22 +87,40 @@ public sealed class ImageCatalog : IAsyncDisposable
     private readonly CancellationTokenSource _stopping = new();
     private readonly Task[] _workers;
     private readonly int _maxEntries;
-    private readonly Func<string, bool, ImageEvidence?> _inspect;
+    private readonly Func<string, bool, (ImageEvidence? Evidence, FileStamp Stamp)> _inspect;
     private readonly Func<string, FileStamp> _stamp;
     private long _verifications;
 
     /// <summary>Builds a catalog that inspects real files.</summary>
     public ImageCatalog(int workers = 2, int maxEntries = 4096)
-        : this(WindowsImageInspector.Read, StampOf, workers, maxEntries)
+        : this(StampOf, WindowsImageInspector.ReadWithStamp, workers, maxEntries)
     {
     }
 
-    /// <summary>Builds a catalog over explicit inspection functions. Used by tests.</summary>
+    /// <summary>
+    /// Builds a catalog over explicit inspection functions. Used by tests; the version inspected is
+    /// taken to be the one <paramref name="stamp"/> reports at the moment of inspection.
+    /// </summary>
     internal ImageCatalog(
         Func<string, bool, ImageEvidence?> inspect,
         Func<string, FileStamp> stamp,
         int workers = 2,
         int maxEntries = 4096)
+        : this(stamp, (path, hash) => (inspect(path, hash), stamp(path)), workers, maxEntries)
+    {
+    }
+
+    /// <summary>A catalog over an inspection that reports the version it verified. Used by tests.</summary>
+    internal static ImageCatalog ForVerifiedVersions(
+        Func<string, bool, (ImageEvidence? Evidence, FileStamp Stamp)> inspect,
+        Func<string, FileStamp> stamp,
+        int workers = 1) => new(stamp, inspect, workers, 4096);
+
+    private ImageCatalog(
+        Func<string, FileStamp> stamp,
+        Func<string, bool, (ImageEvidence? Evidence, FileStamp Stamp)> inspect,
+        int workers,
+        int maxEntries)
     {
         ArgumentNullException.ThrowIfNull(inspect);
         ArgumentNullException.ThrowIfNull(stamp);
@@ -266,9 +284,23 @@ public sealed class ImageCatalog : IAsyncDisposable
         }
 
         var watch = Stopwatch.StartNew();
-        var read = _inspect(record.Path, wantsHash);
+        var (read, verified) = _inspect(record.Path, wantsHash);
         watch.Stop();
         Interlocked.Increment(ref _verifications);
+
+        // A verdict is about one file version: the one this record was made for when the process was
+        // first seen. If the file now at the path is another - replaced or swapped since, perhaps by
+        // whoever started the process - its verdict says nothing about the process, and it is not
+        // recorded as if it did (SL-SEC-014). The record is answered as unverifiable; the next process
+        // started from the new file gets a record and a verification of its own.
+        if (read is not null && verified != record.Stamp)
+        {
+            SplitLaneLog.Warning(
+                LogCategory,
+                $"{ExecutablePath.FileName(record.Path)} changed between the process starting and its verification; " +
+                "the verdict is not applied to it");
+            read = null;
+        }
 
         // A file that cannot be opened cannot be vouched for. It is recorded as a signature that does
         // not verify, so a pinned rule refuses it and a claim on a family rule falls through to DIRECT

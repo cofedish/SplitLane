@@ -28,18 +28,26 @@ internal sealed class WindowsImageInspector : IImageInspector
     /// <summary>
     /// Verifies a file and reads its version resource. Null when the file cannot be opened.
     /// </summary>
-    public static ImageEvidence? Read(string executablePath, bool computeSha256)
+    public static ImageEvidence? Read(string executablePath, bool computeSha256) =>
+        ReadWithStamp(executablePath, computeSha256).Evidence;
+
+    /// <summary>
+    /// The same, with the stamp of the file version that was actually verified - read from the handle
+    /// the signature was checked through - so a caller can tell whether it is the version it asked about
+    /// (SL-SEC-014).
+    /// </summary>
+    public static (ImageEvidence? Evidence, FileStamp Stamp) ReadWithStamp(string executablePath, bool computeSha256)
     {
         var path = ExecutablePath.Normalize(executablePath);
         if (path.Length == 0)
         {
-            return null;
+            return (null, default);
         }
 
         var inspection = ImageFile.Inspect(path, computeSha256);
         if (inspection is null)
         {
-            return null;
+            return (null, default);
         }
 
         var (product, originalName, _) = ImageFile.ReadVersion(path);
@@ -50,10 +58,10 @@ internal sealed class WindowsImageInspector : IImageInspector
         // strings may not belong to the bytes that were verified; the stamp says whether it did.
         if (!ImageFile.TryGetStamp(path, out var after) || after != inspection.Stamp)
         {
-            return null;
+            return (null, default);
         }
 
-        return new ImageEvidence
+        return (new ImageEvidence
         {
             ExecutablePath = path,
             Signature = inspection.Signature switch
@@ -70,7 +78,7 @@ internal sealed class WindowsImageInspector : IImageInspector
             HasVersionInfo = true,
             FileSize = inspection.Stamp.Size,
             Sha256 = inspection.Sha256,
-        };
+        }, inspection.Stamp);
     }
 
     /// <inheritdoc />
