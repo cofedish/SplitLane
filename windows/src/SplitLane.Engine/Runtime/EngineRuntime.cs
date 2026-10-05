@@ -817,6 +817,39 @@ public sealed class EngineRuntime : IAsyncDisposable
     /// </remarks>
     public async Task<ProxyTestResult> TestProxyAsync(CancellationToken cancellationToken)
     {
+        // Any interactive user can point the proxy at any host and port and ask for this test, which
+        // the service then performs from its own network position (SL-SEC-019). One test at a time, at
+        // most one every two seconds, and the answer is coarse - whether and at which stage it failed,
+        // never text or bytes the far end chose - so the service is not a port scanner with a banner
+        // grabber attached. The full detail goes to the log, sanitised.
+        if (!await _proxyTestGate.WaitAsync(0, cancellationToken).ConfigureAwait(false))
+        {
+            return new ProxyTestResult(false, null, "A proxy test is already running.");
+        }
+
+        try
+        {
+            var now = Stopwatch.GetTimestamp();
+            if (Stopwatch.GetElapsedTime(_lastProxyTest, now) < ProxyTestInterval)
+            {
+                return new ProxyTestResult(false, null, "Wait a moment before testing the proxy again.");
+            }
+
+            _lastProxyTest = now;
+            return await RunProxyTestAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _proxyTestGate.Release();
+        }
+    }
+
+    private static readonly TimeSpan ProxyTestInterval = TimeSpan.FromSeconds(2);
+    private readonly SemaphoreSlim _proxyTestGate = new(1, 1);
+    private long _lastProxyTest = -Stopwatch.Frequency * 60;
+
+    private async Task<ProxyTestResult> RunProxyTestAsync(CancellationToken cancellationToken)
+    {
         var proxy = _configuration.Proxy;
 
         try
@@ -845,18 +878,34 @@ public sealed class EngineRuntime : IAsyncDisposable
                 true,
                 ex.ElapsedMilliseconds,
                 $"{proxy.Type.DisplayName()} proxy reachable - it refused the probe destination, as it should " +
-                (ex.StatusCode is { } status ? $"(HTTP {status})." : $"({ex.Message})."));
+                (ex.StatusCode is { } status ? $"(HTTP {status})." : $"({ex.Category.Describe()})."));
         }
         catch (UpstreamProxyException ex)
         {
+            SplitLaneLog.Warning(LogCategory, $"proxy test: {ex.Describe()}");
             _lastError = ex.Message;
-            return new ProxyTestResult(false, null, $"{ex.Category.Describe()}: {ex.Describe()}");
+            return new ProxyTestResult(false, null, CoarseFailure(ex));
         }
         catch (Exception ex)
         {
+            SplitLaneLog.Warning(LogCategory, $"proxy test: {ex.GetType().Name}: {ex.Message}");
             _lastError = ex.Message;
-            return new ProxyTestResult(false, null, ex.Message);
+            return new ProxyTestResult(false, null, "The proxy test failed; the engine log has the detail.");
         }
+    }
+
+    /// <summary>
+    /// What the window is told about a failed test: the category and stage, the HTTP status and the
+    /// scheme - all chosen from fixed vocabularies - and nothing the far end wrote (SL-SEC-019).
+    /// </summary>
+    internal static string CoarseFailure(UpstreamProxyException ex)
+    {
+        ArgumentNullException.ThrowIfNull(ex);
+
+        return $"{ex.Category.Describe()} ({ex.Stage.LogName()}" +
+               (ex.StatusCode is { } status ? $", HTTP {status}" : string.Empty) +
+               (ex.AuthenticationScheme is { } scheme && Relay.HttpProxyAuthentication.Strength(scheme) > 0 ? $", {scheme}" : string.Empty) +
+               "). The engine log has the detail.";
     }
 
     /// <summary>
@@ -908,5 +957,6 @@ public sealed class EngineRuntime : IAsyncDisposable
         _policyStore?.Dispose();
         _updates.Dispose();
         _lifecycle.Dispose();
+        _proxyTestGate.Dispose();
     }
 }
