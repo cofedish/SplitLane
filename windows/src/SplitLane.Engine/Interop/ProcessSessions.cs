@@ -1,4 +1,5 @@
 using System.IO.Pipes;
+using Microsoft.Win32.SafeHandles;
 using System.Runtime.InteropServices;
 
 namespace SplitLane.Engine.Interop;
@@ -13,7 +14,9 @@ internal static partial class ProcessSessions
     public static uint? OfClient(NamedPipeServerStream pipe)
     {
         ArgumentNullException.ThrowIfNull(pipe);
-        return GetNamedPipeClientSessionId(pipe.SafePipeHandle.DangerousGetHandle(), out var session) ? session : null;
+        // The safe handle, not its raw value: it is held for the call, so a pipe closed meanwhile
+        // cannot have its handle value reused under the call.
+        return GetNamedPipeClientSessionId(pipe.SafePipeHandle, out var session) ? session : null;
     }
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
@@ -22,5 +25,5 @@ internal static partial class ProcessSessions
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static partial bool GetNamedPipeClientSessionId(nint pipe, out uint sessionId);
+    private static partial bool GetNamedPipeClientSessionId(SafePipeHandle pipe, out uint sessionId);
 }
