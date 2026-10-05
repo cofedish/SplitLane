@@ -81,6 +81,11 @@ public sealed class UdpLanePool : IDisposable
                 }
 
                 _taken[i] = true;
+
+                // A free socket stays bound, so anything sent to it while it was free is queued in it.
+                // Emptied before a conversation is given the socket, so a new lane never relays what
+                // somebody left waiting for it (SL-SEC-008).
+                Drain(_sockets[i]!);
                 return (_sockets[i]!, (ushort)(BasePort + i));
             }
         }
@@ -140,6 +145,29 @@ public sealed class UdpLanePool : IDisposable
 
         bound.CopyTo(_sockets, 0);
         return true;
+    }
+
+    /// <summary>Discards whatever is queued in a socket. Bounded, so a flood cannot hold the caller.</summary>
+    internal static int Drain(UdpClient socket)
+    {
+        var discarded = 0;
+        var scratch = new byte[ushort.MaxValue];
+
+        try
+        {
+            while (discarded < 4096 && socket.Available > 0)
+            {
+                EndPoint any = new IPEndPoint(IPAddress.Any, 0);
+                socket.Client.ReceiveFrom(scratch, ref any);
+                discarded++;
+            }
+        }
+        catch (SocketException)
+        {
+            // A queued ICMP error surfaces here; there is nothing left worth reading.
+        }
+
+        return discarded;
     }
 
     private static UdpClient? TryBind(ushort port)

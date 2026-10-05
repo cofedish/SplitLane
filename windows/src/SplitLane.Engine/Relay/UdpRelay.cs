@@ -172,6 +172,13 @@ public sealed class UdpRelay : IAsyncDisposable
             try
             {
                 var result = await lane.ReceiveAsync(cancellationToken).ConfigureAwait(false);
+
+                if (!lane.IsFromApplication(result.RemoteEndPoint))
+                {
+                    Interlocked.Increment(ref _refused);
+                    continue;
+                }
+
                 payload = result.Buffer;
             }
             catch (Exception ex) when (ex is OperationCanceledException or ObjectDisposedException)

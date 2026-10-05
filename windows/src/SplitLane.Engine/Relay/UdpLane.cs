@@ -66,6 +66,21 @@ public sealed class UdpLane : IDisposable
     /// <summary>When a datagram last passed, for idle eviction.</summary>
     public DateTimeOffset LastUsed { get; set; } = DateTimeOffset.UtcNow;
 
+    /// <summary>
+    /// Whether a datagram that reached this lane came from the application it stands in for.
+    /// </summary>
+    /// <remarks>
+    /// The packet layer rewrites the application's datagram to come from loopback, keeping its source
+    /// port. Anything else that reaches a lane port - another local process writing to it directly -
+    /// is not the application and is not relayed (SL-SEC-008).
+    /// </remarks>
+    public bool IsFromApplication(IPEndPoint sender)
+    {
+        ArgumentNullException.ThrowIfNull(sender);
+        var address = sender.Address.IsIPv4MappedToIPv6 ? sender.Address.MapToIPv4() : sender.Address;
+        return address.Equals(IPAddress.Loopback) && sender.Port == ApplicationPort;
+    }
+
     /// <summary>Reads the next datagram the application sent to this lane.</summary>
     public Task<UdpReceiveResult> ReceiveAsync(CancellationToken cancellationToken) =>
         _socket.ReceiveAsync(cancellationToken).AsTask();
