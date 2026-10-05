@@ -700,6 +700,84 @@ public sealed class DivertPipeline : IAsyncDisposable
     }
 
     /// <summary>
+    /// Decides every known UDP socket again against the rules now in force (SL-SEC-023).
+    /// </summary>
+    /// <remarks>
+    /// A UDP socket was decided once, when it bound. A long-lived one - QUIC, a voice call - kept that
+    /// answer through any later change: an application selected afterwards stayed DIRECT, a managed
+    /// Block applied to nothing already open. TCP is different on purpose: a decision belongs to a
+    /// connection, and a change applies to the next one.
+    /// </remarks>
+    /// <returns>How many sockets changed lane.</returns>
+    internal int RedecideUdp()
+    {
+        var engine = _engine();
+        var changed = 0;
+
+        foreach (var (slot, udpFlow) in _udpFlows)
+        {
+            if (udpFlow.Flow.IsEngineTraffic || _pendingUdp.ContainsKey(slot))
+            {
+                continue;
+            }
+
+            var decision = engine.Decide(udpFlow.Flow);
+            var before = _udpPortOwners.TryGetValue(slot, out var owner) ? owner.Action : RouteAction.Direct;
+
+            PendingBind? pending = null;
+            var action = decision.Action;
+
+            if (decision.Reason == RouteReasonKind.IdentityPending)
+            {
+                // Held, as a new socket would be, until its image is verified.
+                action = RouteAction.Block;
+                if (Images is { } images && udpFlow.Flow.ExecutablePath is { Length: > 0 } path)
+                {
+                    var record = images.Refresh(path);
+                    pending = new PendingBind(udpFlow.Flow, record, udpFlow.Flow.Image?.PackageFamilyName, udpFlow.EndpointId, udpFlow.DualStack);
+                    images.RequestVerification(record, decision.Needs);
+                }
+            }
+
+            lock (_udpGate)
+            {
+                // Only this socket's own row is touched; one that closed meanwhile is left alone.
+                if (!_udpFlows.TryGetValue(slot, out var current) || !ReferenceEquals(current, udpFlow))
+                {
+                    continue;
+                }
+
+                if (pending is not null)
+                {
+                    _pendingUdp[slot] = pending;
+                }
+
+                if (action is RouteAction.Block or RouteAction.Proxy or RouteAction.ProxyOnly)
+                {
+                    _udpPortOwners[slot] = new UdpSocketDecision(udpFlow.Flow.ProcessId, action, udpFlow.EndpointId, udpFlow.DualStack);
+                }
+                else
+                {
+                    _udpPortOwners.TryRemove(slot, out _);
+                }
+            }
+
+            if (action != before)
+            {
+                changed++;
+
+                // Lanes carry a socket that is proxied; one that no longer is must not keep them.
+                if (action is not (RouteAction.Proxy or RouteAction.ProxyOnly) && (!slot.IPv6 || udpFlow.DualStack))
+                {
+                    _udpRelay?.Forget(slot.Port);
+                }
+            }
+        }
+
+        return changed;
+    }
+
+    /// <summary>
     /// Records what was decided about a UDP socket when it bound - unless another socket on the same
     /// family and port already holds a stricter answer (SL-SEC-005).
     /// </summary>

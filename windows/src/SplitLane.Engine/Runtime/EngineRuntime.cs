@@ -374,6 +374,12 @@ public sealed class EngineRuntime : IAsyncDisposable
         _credential = _store.ResolveCredential(effective.Proxy);
         _engine = new RuleEngine(effective);
 
+        // Open UDP sockets are decided again under the new rules (SL-SEC-023).
+        if (_pipeline is { } pipeline && pipeline.RedecideUdp() is > 0 and var redecided)
+        {
+            SplitLaneLog.Info(LogCategory, $"{redecided} open UDP sockets changed lane under the new configuration");
+        }
+
         SplitLaneLog.Info(
             LogCategory,
             $"configuration generation {effective.Version.Generation} applied: " +
