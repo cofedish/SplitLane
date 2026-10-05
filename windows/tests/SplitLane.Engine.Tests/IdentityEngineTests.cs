@@ -354,7 +354,7 @@ public sealed class IdentityEngineTests : IDisposable
         using var client = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
         client.Bind(new IPEndPoint(IPAddress.Loopback, 0));
         var sourcePort = (ushort)((IPEndPoint)client.LocalEndPoint!).Port;
-        nat.Record(sourcePort, NatTable.EntryFor(
+        nat.Record(FlowKey.From(IPAddress.Loopback, sourcePort), NatTable.EntryFor(
             IPAddress.Loopback, IPAddress.Loopback, echoPort, (uint)process.Id, info.ExecutablePath, rule,
             hostname: null, DateTimeOffset.UtcNow));
 

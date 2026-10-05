@@ -20,7 +20,15 @@ namespace SplitLane.Engine.Divert;
 /// Proxy to carry its datagrams, Block to refuse them. Never Direct: a selected application's
 /// datagrams do not leave this machine unproxied, and an unselected one is not in this table.
 /// </param>
-internal readonly record struct UdpSocketDecision(uint ProcessId, RouteAction Action);
+/// <param name="EndpointId">The socket that bound; only its CLOSE removes the decision.</param>
+/// <param name="DualStack">
+/// Bound to the IPv6 wildcard, so it may also send IPv4 datagrams on the same port.
+/// </param>
+internal readonly record struct UdpSocketDecision(
+    uint ProcessId, RouteAction Action, ulong EndpointId = 0, bool DualStack = false);
+
+/// <summary>The flow a UDP socket was described as when it bound, and which socket that was.</summary>
+internal sealed record UdpFlow(FlowDescriptor Flow, ulong EndpointId, bool DualStack);
 
 /// <summary>A TCP connection held while its process's identity is verified.</summary>
 /// <param name="Flow">The flow as it was described at connect time.</param>
@@ -28,14 +36,19 @@ internal readonly record struct UdpSocketDecision(uint ProcessId, RouteAction Ac
 /// <param name="Remote">Where it was connecting.</param>
 /// <param name="Image">The process's image, whose verification is awaited.</param>
 /// <param name="PackageFamily">The package family from the process token, if any.</param>
+/// <param name="EndpointId">The socket that connected.</param>
 internal sealed record PendingConnection(
-    FlowDescriptor Flow, IPAddress Local, IPAddress Remote, ImageRecord Image, string? PackageFamily);
+    FlowDescriptor Flow, IPAddress Local, IPAddress Remote, ImageRecord Image, string? PackageFamily,
+    ulong EndpointId = 0);
 
 /// <summary>A UDP socket whose datagrams are held while its process's identity is verified.</summary>
 /// <param name="Flow">The flow as it was described when the socket bound.</param>
 /// <param name="Image">The process's image, whose verification is awaited.</param>
 /// <param name="PackageFamily">The package family from the process token, if any.</param>
-internal sealed record PendingBind(FlowDescriptor Flow, ImageRecord Image, string? PackageFamily);
+/// <param name="EndpointId">The socket that bound.</param>
+/// <param name="DualStack">Bound to the IPv6 wildcard.</param>
+internal sealed record PendingBind(
+    FlowDescriptor Flow, ImageRecord Image, string? PackageFamily, ulong EndpointId = 0, bool DualStack = false);
 
 /// <summary>
 /// The divert layer: three WinDivert handles and the threads that drain them.
@@ -110,11 +123,17 @@ public sealed class DivertPipeline : IAsyncDisposable
     /// without this map a selected application's QUIC traffic would be unattributable at the packet
     /// layer and would escape DIRECT — the exact leak ADR 0004 exists to prevent.
     /// </remarks>
-    private readonly ConcurrentDictionary<ushort, UdpSocketDecision> _udpPortOwners = new();
-    private readonly ConcurrentDictionary<ushort, FlowDescriptor> _udpFlows = new();
+    /// <remarks>
+    /// Keyed on family and port, not the port alone, and each row remembers the socket that made it
+    /// (SL-SEC-005): a socket on the same number in the other family, or another socket sharing the
+    /// port through address reuse, can neither erase nor overwrite a stricter decision.
+    /// </remarks>
+    private readonly ConcurrentDictionary<PortSlot, UdpSocketDecision> _udpPortOwners = new();
+    private readonly ConcurrentDictionary<PortSlot, UdpFlow> _udpFlows = new();
     private readonly ConcurrentDictionary<ushort, IPAddress> _udpOrigins = new();
-    private readonly ConcurrentDictionary<ushort, PendingConnection> _pendingTcp = new();
-    private readonly ConcurrentDictionary<ushort, PendingBind> _pendingUdp = new();
+    private readonly ConcurrentDictionary<FlowKey, PendingConnection> _pendingTcp = new();
+    private readonly ConcurrentDictionary<PortSlot, PendingBind> _pendingUdp = new();
+    private readonly Lock _udpGate = new();
     private UdpRelay? _udpRelay;
     private UdpLanePool? _lanePool;
 
@@ -462,34 +481,40 @@ public sealed class DivertPipeline : IAsyncDisposable
         }
     }
 
-    private void HandleSocketEvent(in WinDivertAddress address)
+    internal void HandleSocketEvent(in WinDivertAddress address)
     {
         var socket = address.Socket;
+
+        // A socket bound to a loopback address never sends a packet the network handle routes (TCP
+        // loopback is not diverted, loopback UDP only from the engine's own lanes). Its events are
+        // ignored, so that they cannot touch the rows of a real connection on the same port number
+        // (SL-SEC-005). The engine's own sockets are always tracked.
+        if (socket.ProcessId != _selfProcessId && IPAddress.IsLoopback(SocketAddressReader.ReadLocal(address)))
+        {
+            return;
+        }
 
         switch (address.Event)
         {
             case WinDivertEvent.SocketClose:
                 if (socket.Protocol == PacketView.ProtocolTcp)
                 {
-                    _nat.Close(socket.LocalPort);
-                    _pendingTcp.TryRemove(socket.LocalPort, out _);
+                    var key = FlowKey.From(SocketAddressReader.ReadLocal(address), socket.LocalPort);
+                    _nat.Close(key, socket.EndpointId);
+
+                    if (_pendingTcp.TryGetValue(key, out var pending) && OwnedBy(pending.EndpointId, socket.EndpointId))
+                    {
+                        _pendingTcp.TryRemove(new KeyValuePair<FlowKey, PendingConnection>(key, pending));
+                    }
+
                     return;
                 }
 
-                _pendingUdp.TryRemove(socket.LocalPort, out _);
-                _udpFlows.TryRemove(socket.LocalPort, out _);
-
-                if (_udpPortOwners.TryRemove(socket.LocalPort, out _))
-                {
-                    // The association at the proxy outlives the socket that needed it otherwise, and
-                    // each one holds a TCP connection open there.
-                    _udpRelay?.Forget(socket.LocalPort);
-                }
-
+                CloseUdp(new PortSlot(address.IPv6, socket.LocalPort), socket.EndpointId);
                 return;
 
             case WinDivertEvent.SocketBind when socket.Protocol == PacketView.ProtocolUdp:
-                TrackUdpBind(socket);
+                TrackUdpBind(address);
                 return;
 
             case WinDivertEvent.SocketConnect:
@@ -501,12 +526,75 @@ public sealed class DivertPipeline : IAsyncDisposable
         }
     }
 
-    private void TrackUdpBind(in WinDivertDataSocket socket)
+    /// <summary>Whether a recorded owner is the closing socket. An owner of 0 is matched by any close.</summary>
+    private static bool OwnedBy(ulong owner, ulong closing) => owner == 0 || owner == closing;
+
+    /// <summary>The strictness of an answer, for deciding which of two sockets on one port stands.</summary>
+    private static int Strictness(RouteAction action) => action switch
     {
+        RouteAction.Block => 3,
+        RouteAction.ProxyOnly => 2,
+        RouteAction.Proxy => 1,
+        _ => 0,
+    };
+
+    /// <summary>Forgets what a closing UDP socket owned, and nothing another socket owns.</summary>
+    internal void CloseUdp(PortSlot slot, ulong endpointId)
+    {
+        lock (_udpGate)
+        {
+            if (_pendingUdp.TryGetValue(slot, out var pending) && OwnedBy(pending.EndpointId, endpointId))
+            {
+                _pendingUdp.TryRemove(new KeyValuePair<PortSlot, PendingBind>(slot, pending));
+            }
+
+            if (_udpFlows.TryGetValue(slot, out var flow) && OwnedBy(flow.EndpointId, endpointId))
+            {
+                _udpFlows.TryRemove(new KeyValuePair<PortSlot, UdpFlow>(slot, flow));
+            }
+
+            if (_udpPortOwners.TryGetValue(slot, out var owner) && OwnedBy(owner.EndpointId, endpointId) &&
+                _udpPortOwners.TryRemove(new KeyValuePair<PortSlot, UdpSocketDecision>(slot, owner)))
+            {
+                // The association at the proxy outlives the socket that needed it otherwise, and
+                // each one holds a TCP connection open there. Lanes exist for IPv4 only.
+                if (!slot.IPv6 || owner.DualStack)
+                {
+                    _udpRelay?.Forget(slot.Port);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Whether a new bind from another socket may replace what is recorded for a slot: only when it
+    /// is at least as strict, so a second socket on the same port can never relax a selected or
+    /// refused application's answer (SL-SEC-005).
+    /// </summary>
+    private bool MayReplace(PortSlot slot, ulong endpointId, RouteAction incoming)
+    {
+        if (!_udpFlows.TryGetValue(slot, out var existing) || existing.EndpointId == 0 ||
+            existing.EndpointId == endpointId)
+        {
+            return true;
+        }
+
+        var current = _udpPortOwners.TryGetValue(slot, out var owner) ? owner.Action : RouteAction.Direct;
+        return Strictness(incoming) >= Strictness(current);
+    }
+
+    private void TrackUdpBind(in WinDivertAddress address)
+    {
+        var socket = address.Socket;
+        var slot = new PortSlot(address.IPv6, socket.LocalPort);
+        var dualStack = address.IPv6 && SocketAddressReader.ReadLocal(address).Equals(IPAddress.IPv6Any);
+
         if (socket.ProcessId == _selfProcessId)
         {
-            _udpFlows[socket.LocalPort] = new FlowDescriptor(socket.ProcessId, string.Empty, null, 0,
-                FlowProtocol.Udp, IsEngineTraffic: true);
+            _udpFlows[slot] = new UdpFlow(
+                new FlowDescriptor(socket.ProcessId, string.Empty, null, 0, FlowProtocol.Udp, IsEngineTraffic: true),
+                socket.EndpointId,
+                dualStack);
             return;
         }
 
@@ -524,28 +612,63 @@ public sealed class DivertPipeline : IAsyncDisposable
         var flow = new FlowDescriptor(
             socket.ProcessId, info.ExecutablePath, "203.0.113.1", 0, FlowProtocol.Udp,
             Image: EvidenceFor(info, engine));
-        _udpFlows[socket.LocalPort] = flow;
 
         var decision = engine.Decide(flow);
+        var held = decision.Reason == RouteReasonKind.IdentityPending && Images is not null && info.Image is not null;
 
-        if (decision.Reason == RouteReasonKind.IdentityPending && Images is not null && info.Image is not null)
+        var recorded = RecordUdpDecision(
+            slot,
+            socket.EndpointId,
+            dualStack,
+            flow,
+            held ? RouteAction.Block : decision.Action,
+            held ? new PendingBind(flow, info.Image!, info.PackageFamilyName, socket.EndpointId, dualStack) : null);
+
+        if (recorded && held)
         {
-            // Held: the datagrams are dropped until the image is verified, then the socket is decided
-            // again. QUIC and DNS both retransmit.
-            _udpPortOwners[socket.LocalPort] = new UdpSocketDecision(socket.ProcessId, RouteAction.Block);
-            _pendingUdp[socket.LocalPort] = new PendingBind(flow, info.Image, info.PackageFamilyName);
             Interlocked.Increment(ref _held);
-            Images.RequestVerification(info.Image, decision.Needs);
-            return;
+            Images!.RequestVerification(info.Image!, decision.Needs);
         }
+    }
 
-        // Both answers are remembered now, because they lead to different work: a refused socket's
-        // datagrams are dropped where they are found, and a proxied socket's are carried. What is
-        // still not remembered is every other socket on the machine, which would be both larger and
-        // a description of what the user is doing.
-        if (decision.Action is RouteAction.Block or RouteAction.Proxy or RouteAction.ProxyOnly)
+    /// <summary>
+    /// Records what was decided about a UDP socket when it bound - unless another socket on the same
+    /// family and port already holds a stricter answer (SL-SEC-005).
+    /// </summary>
+    /// <returns>Whether this socket's answer was recorded.</returns>
+    internal bool RecordUdpDecision(
+        PortSlot slot, ulong endpointId, bool dualStack, FlowDescriptor flow, RouteAction action, PendingBind? pending)
+    {
+        lock (_udpGate)
         {
-            _udpPortOwners[socket.LocalPort] = new UdpSocketDecision(socket.ProcessId, decision.Action);
+            if (!MayReplace(slot, endpointId, action))
+            {
+                return false;
+            }
+
+            _udpFlows[slot] = new UdpFlow(flow, endpointId, dualStack);
+
+            if (pending is not null)
+            {
+                // Held: the datagrams are dropped until the image is verified, then the socket is
+                // decided again. QUIC and DNS both retransmit.
+                _udpPortOwners[slot] = new UdpSocketDecision(flow.ProcessId, RouteAction.Block, endpointId, dualStack);
+                _pendingUdp[slot] = pending;
+            }
+            else if (action is RouteAction.Block or RouteAction.Proxy or RouteAction.ProxyOnly)
+            {
+                // Both answers are remembered, because they lead to different work: a refused
+                // socket's datagrams are dropped where they are found, and a proxied socket's are
+                // carried. What is not remembered is every other socket on the machine.
+                _udpPortOwners[slot] = new UdpSocketDecision(flow.ProcessId, action, endpointId, dualStack);
+            }
+            else if (_udpPortOwners.TryGetValue(slot, out var owner) && OwnedBy(owner.EndpointId, endpointId))
+            {
+                // This socket's own earlier answer no longer applies.
+                _udpPortOwners.TryRemove(new KeyValuePair<PortSlot, UdpSocketDecision>(slot, owner));
+            }
+
+            return true;
         }
     }
 
@@ -572,10 +695,17 @@ public sealed class DivertPipeline : IAsyncDisposable
         }
 
         var isSelf = socket.ProcessId == _selfProcessId;
-        var info = isSelf ? default : _processes.ResolveInfo(socket.ProcessId);
-        var path = info.ExecutablePath ?? string.Empty;
         var remote = SocketAddressReader.ReadRemote(address);
         var local = SocketAddressReader.ReadLocal(address);
+
+        // Loopback TCP is never diverted; a decision for it would only be a row that can collide.
+        if (IPAddress.IsLoopback(remote))
+        {
+            return;
+        }
+
+        var info = isSelf ? default : _processes.ResolveInfo(socket.ProcessId);
+        var path = info.ExecutablePath ?? string.Empty;
         var remoteText = remote.ToString();
         var hostname = _dns.Lookup(remote);
         var engine = _engine();
@@ -596,8 +726,9 @@ public sealed class DivertPipeline : IAsyncDisposable
         {
             // Held, not decided. The SYN that follows is dropped until the image is verified; the
             // retransmission a second later meets whatever the answer turned out to be.
-            _nat.RecordVerdict(socket.LocalPort, remote, socket.RemotePort, NatVerdict.Pending);
-            _pendingTcp[socket.LocalPort] = new PendingConnection(flow, local, remote, info.Image, info.PackageFamilyName);
+            var key = FlowKey.From(local, socket.LocalPort);
+            _nat.RecordVerdict(key, remote, socket.RemotePort, NatVerdict.Pending, socket.EndpointId);
+            _pendingTcp[key] = new PendingConnection(flow, local, remote, info.Image, info.PackageFamilyName, socket.EndpointId);
             Interlocked.Increment(ref _held);
             Images.RequestVerification(info.Image, decision.Needs);
             SplitLaneLog.Debug(
@@ -606,7 +737,7 @@ public sealed class DivertPipeline : IAsyncDisposable
             return;
         }
 
-        RecordTcpDecision(socket.LocalPort, local, remote, flow, decision, rule, engine);
+        RecordTcpDecision(socket.LocalPort, local, remote, flow, decision, rule, engine, socket.EndpointId);
     }
 
     /// <summary>Records what the packet loop must do with a connection's packets.</summary>
@@ -617,16 +748,32 @@ public sealed class DivertPipeline : IAsyncDisposable
         in FlowDescriptor flow,
         RouteDecision decision,
         AppRule? rule,
-        RuleEngine engine)
+        RuleEngine engine,
+        ulong endpointId = 0)
     {
+        var key = FlowKey.From(local, localPort);
+
         switch (decision.Action)
         {
             case RouteAction.Proxy:
             case RouteAction.ProxyOnly:
-                _nat.Record(localPort, NatTable.EntryFor(
-                    local, remote, flow.RemotePort, flow.ProcessId, flow.ExecutablePath, rule, flow.RemoteHostname,
-                    DateTimeOffset.UtcNow) with
-                { Action = decision.Action, RuleKey = decision.RuleKey });
+                if (!_nat.Record(key, NatTable.EntryFor(
+                        local, remote, flow.RemotePort, flow.ProcessId, flow.ExecutablePath, rule, flow.RemoteHostname,
+                        DateTimeOffset.UtcNow) with
+                    { Action = decision.Action, RuleKey = decision.RuleKey, EndpointId = endpointId }))
+                {
+                    // Another redirected connection holds this family and port. After the rewrite the
+                    // two could not be told apart, so this one is refused rather than allowed to
+                    // answer for the other - and never let out DIRECT.
+                    _nat.RecordVerdict(key, remote, flow.RemotePort, NatVerdict.Block, endpointId);
+                    _statistics.CountBlocked();
+                    SplitLaneLog.Warning(
+                        LogCategory,
+                        $"refused {ExecutablePath.FileName(flow.ExecutablePath)} :{localPort} -> {flow.DestinationDisplay}: " +
+                        "another redirected connection holds the same port");
+                    break;
+                }
+
                 _statistics.CountProxied();
                 SplitLaneLog.Debug(
                     LogCategory,
@@ -638,7 +785,7 @@ public sealed class DivertPipeline : IAsyncDisposable
             case RouteAction.Block:
                 // Dropped by the packet loop. This used to be recorded as "leave alone", which counted
                 // a blocked TCP connection as blocked and then let it out.
-                _nat.RecordVerdict(localPort, remote, flow.RemotePort, NatVerdict.Block);
+                _nat.RecordVerdict(key, remote, flow.RemotePort, NatVerdict.Block, endpointId);
                 _statistics.CountBlocked();
                 SplitLaneLog.Debug(
                     LogCategory,
@@ -650,7 +797,7 @@ public sealed class DivertPipeline : IAsyncDisposable
                 // Recorded even though nothing is redirected. The packet loop reads the absence of a
                 // decision as "not decided yet" and waits; without this every connection an
                 // unselected application opens pays that wait in full, for an answer already given.
-                _nat.RecordDirect(localPort, remote, flow.RemotePort);
+                _nat.RecordDirect(key, remote, flow.RemotePort, endpointId);
                 _statistics.CountDirect();
                 if (engine.Snapshot.LogsDirectFlows)
                 {
@@ -681,7 +828,7 @@ public sealed class DivertPipeline : IAsyncDisposable
         var engine = _engine();
         var released = 0;
 
-        foreach (var (port, pending) in _pendingTcp)
+        foreach (var (key, pending) in _pendingTcp)
         {
             if (!ReferenceEquals(pending.Image, record))
             {
@@ -701,17 +848,17 @@ public sealed class DivertPipeline : IAsyncDisposable
                 continue;
             }
 
-            if (!_pendingTcp.TryRemove(new KeyValuePair<ushort, PendingConnection>(port, pending)) ||
-                !_nat.TryResolvePending(port, pending.Remote, flow.RemotePort))
+            if (!_pendingTcp.TryRemove(new KeyValuePair<FlowKey, PendingConnection>(key, pending)) ||
+                !_nat.TryResolvePending(key, pending.Remote, flow.RemotePort))
             {
                 continue;
             }
 
-            RecordTcpDecision(port, pending.Local, pending.Remote, flow, decision, rule, engine);
+            RecordTcpDecision(key.Port, pending.Local, pending.Remote, flow, decision, rule, engine, pending.EndpointId);
             released++;
         }
 
-        foreach (var (port, pending) in _pendingUdp)
+        foreach (var (slot, pending) in _pendingUdp)
         {
             if (!ReferenceEquals(pending.Image, record))
             {
@@ -722,7 +869,6 @@ public sealed class DivertPipeline : IAsyncDisposable
             {
                 Image = images.EvidenceFor(record, pending.PackageFamily, engine.Snapshot.NeedsProductName),
             };
-            _udpFlows[port] = flow;
 
             var decision = engine.Decide(flow);
             if (decision.Reason == RouteReasonKind.IdentityPending)
@@ -731,18 +877,24 @@ public sealed class DivertPipeline : IAsyncDisposable
                 continue;
             }
 
-            if (!_pendingUdp.TryRemove(new KeyValuePair<ushort, PendingBind>(port, pending)))
+            lock (_udpGate)
             {
-                continue;
-            }
+                // Still this socket's hold? A close, or another socket since, leaves it alone.
+                if (!_pendingUdp.TryRemove(new KeyValuePair<PortSlot, PendingBind>(slot, pending)))
+                {
+                    continue;
+                }
 
-            if (decision.Action is RouteAction.Block or RouteAction.Proxy or RouteAction.ProxyOnly)
-            {
-                _udpPortOwners[port] = new UdpSocketDecision(flow.ProcessId, decision.Action);
-            }
-            else
-            {
-                _udpPortOwners.TryRemove(port, out _);
+                _udpFlows[slot] = new UdpFlow(flow, pending.EndpointId, pending.DualStack);
+
+                if (decision.Action is RouteAction.Block or RouteAction.Proxy or RouteAction.ProxyOnly)
+                {
+                    _udpPortOwners[slot] = new UdpSocketDecision(flow.ProcessId, decision.Action, pending.EndpointId, pending.DualStack);
+                }
+                else if (_udpPortOwners.TryGetValue(slot, out var owner) && owner.EndpointId == pending.EndpointId)
+                {
+                    _udpPortOwners.TryRemove(new KeyValuePair<PortSlot, UdpSocketDecision>(slot, owner));
+                }
             }
 
             released++;
@@ -870,14 +1022,14 @@ public sealed class DivertPipeline : IAsyncDisposable
     /// a per-port wait handle would cost an allocation on every connection on the machine to save a
     /// few spins on some of them.
     /// </remarks>
-    private void WaitForDecision(in PacketView view)
+    private void WaitForDecision(FlowKey key, in PacketView view)
     {
         var deadline = Stopwatch.GetTimestamp() + (Stopwatch.Frequency * DecisionWaitMilliseconds / 1000);
         var spins = 0;
 
         while (Stopwatch.GetTimestamp() < deadline)
         {
-            if (HasDecision(view))
+            if (HasDecision(key, view))
             {
                 Interlocked.Increment(ref _decisionsWaitedFor);
                 return;
@@ -943,7 +1095,9 @@ public sealed class DivertPipeline : IAsyncDisposable
             return ClassifyUdp(packet, view, ref address);
         }
 
-        if (_nat.IsClosedStrict(view.SourcePort, new IPAddress(view.DestinationAddress), view.DestinationPort))
+        var key = FlowKey.From(view.SourceAddress, view.SourcePort);
+
+        if (_nat.IsClosedStrict(key, new IPAddress(view.DestinationAddress), view.DestinationPort))
         {
             Interlocked.Increment(ref _refusedPacketsDropped);
             return PacketAction.Drop;
@@ -965,11 +1119,11 @@ public sealed class DivertPipeline : IAsyncDisposable
         // So a SYN with no decision waits for one, briefly. Only SYNs wait, and only for a few
         // milliseconds: they are a small fraction of traffic, the cost lands on connection setup
         // rather than throughput, and a bounded wait cannot stall the packet loop indefinitely.
-        if (view.IsTcpSyn && !HasDecision(view))
+        if (view.IsTcpSyn && !HasDecision(key, view))
         {
-            WaitForDecision(view);
+            WaitForDecision(key, view);
             // Destination policies must not fail open when the socket pump misses its deadline.
-            if (!HasDecision(view) && _engine().Snapshot.DomainsCount > 0)
+            if (!HasDecision(key, view) && _engine().Snapshot.DomainsCount > 0)
             {
                 return PacketAction.Drop;
             }
@@ -978,7 +1132,7 @@ public sealed class DivertPipeline : IAsyncDisposable
         // A connection held for verification, or refused, goes nowhere. Checked against the recorded
         // destination as well as the port, for the same reason HasDecision is: a stale row must not
         // answer for a different connection.
-        if (_nat.TryGetVerdict(view.SourcePort, out var verdictDestination, out var verdictPort, out var verdict) &&
+        if (_nat.TryGetVerdict(key, out var verdictDestination, out var verdictPort, out var verdict) &&
             verdict != NatVerdict.Direct &&
             verdictPort == view.DestinationPort &&
             AddressMatches(view.DestinationAddress, verdictDestination))
@@ -996,7 +1150,7 @@ public sealed class DivertPipeline : IAsyncDisposable
         }
 
         // Application traffic that a socket-layer decision already marked for the proxy lane.
-        if (_nat.TryGet(view.SourcePort, out var entry) &&
+        if (_nat.TryGet(key, out var entry) &&
             entry.OriginalDestinationPort == view.DestinationPort &&
             AddressMatches(view.DestinationAddress, entry.OriginalDestination))
         {
@@ -1050,7 +1204,7 @@ public sealed class DivertPipeline : IAsyncDisposable
 
         var snapshot = _engine().Snapshot;
         if (snapshot.DomainsCount > 0 &&
-            !(_nat.TryGetVerdict(view.SourcePort, out var directAddress, out var directPort, out var directVerdict) &&
+            !(_nat.TryGetVerdict(key, out var directAddress, out var directPort, out var directVerdict) &&
               directVerdict == NatVerdict.Direct && directPort == view.DestinationPort &&
               AddressMatches(view.DestinationAddress, directAddress)))
         {
@@ -1092,12 +1246,13 @@ public sealed class DivertPipeline : IAsyncDisposable
         var engine = _engine();
         IPAddress? destination = null;
         RouteDecision resolved = RouteDecision.DirectDefault;
-        var action = _udpPortOwners.TryGetValue(view.SourcePort, out var selected)
-            ? selected.Action : RouteAction.Direct;
+        var slot = new PortSlot(view.IsIPv6, view.SourcePort);
+        var hasOwner = TryGetUdpOwner(slot, out var selected);
+        var action = hasOwner ? selected.Action : RouteAction.Direct;
         if (engine.Snapshot.DomainsCount > 0)
         {
             destination = new IPAddress(view.DestinationAddress);
-            if (!_udpFlows.TryGetValue(view.SourcePort, out var basis))
+            if (!TryGetUdpFlow(slot, out var basis))
             {
                 // BIND may race the first datagram, but that must not block unrelated traffic
                 // (especially DNS itself). Hold only destinations with a candidate domain rule.
@@ -1121,7 +1276,7 @@ public sealed class DivertPipeline : IAsyncDisposable
             action = resolved.Action;
         }
         // Existing identity holds/mismatches retain their refusal until verification completes.
-        if (_udpPortOwners.TryGetValue(view.SourcePort, out var held) && held.Action == RouteAction.Block &&
+        if (hasOwner && selected.Action == RouteAction.Block &&
             resolved.Reason != RouteReasonKind.DomainRule)
         {
             action = RouteAction.Block;
@@ -1163,9 +1318,30 @@ public sealed class DivertPipeline : IAsyncDisposable
         return PacketAction.Drop;
     }
 
+    /// <summary>
+    /// The decision for a UDP socket by family and port. An IPv4 datagram can also come from a
+    /// dual-stack socket bound to the IPv6 wildcard, which the socket layer reported as IPv6.
+    /// </summary>
+    private bool TryGetUdpOwner(PortSlot slot, out UdpSocketDecision owner) =>
+        _udpPortOwners.TryGetValue(slot, out owner) ||
+        (!slot.IPv6 && _udpPortOwners.TryGetValue(slot with { IPv6 = true }, out owner) && owner.DualStack);
+
+    private bool TryGetUdpFlow(PortSlot slot, out FlowDescriptor flow)
+    {
+        if (_udpFlows.TryGetValue(slot, out var found) ||
+            (!slot.IPv6 && _udpFlows.TryGetValue(slot with { IPv6 = true }, out found) && found.DualStack))
+        {
+            flow = found.Flow;
+            return true;
+        }
+
+        flow = default!;
+        return false;
+    }
+
     private PacketAction RestoreReply(Span<byte> packet, in PacketView view, ref WinDivertAddress address)
     {
-        if (!_nat.TryGet(view.DestinationPort, out var entry))
+        if (!_nat.TryGetRedirected(new PortSlot(view.IsIPv6, view.DestinationPort), out var entry))
         {
             // The connection is gone. Dropping is right: reinjecting a loopback packet addressed to a
             // port whose NAT entry expired would deliver the listener's bytes to whatever now owns
@@ -1196,16 +1372,16 @@ public sealed class DivertPipeline : IAsyncDisposable
     /// for this one's answer - in the direction that matters, that would end a real decision's wait
     /// early and let a selected application's SYN out un-redirected.
     /// </remarks>
-    private bool HasDecision(in PacketView view)
+    private bool HasDecision(FlowKey key, in PacketView view)
     {
-        if (_nat.TryGet(view.SourcePort, out var entry) &&
+        if (_nat.TryGet(key, out var entry) &&
             entry.OriginalDestinationPort == view.DestinationPort &&
             AddressMatches(view.DestinationAddress, entry.OriginalDestination))
         {
             return true;
         }
 
-        return _nat.TryGetDirect(view.SourcePort, out var destination, out var port) &&
+        return _nat.TryGetDirect(key, out var destination, out var port) &&
                port == view.DestinationPort &&
                AddressMatches(view.DestinationAddress, destination);
     }

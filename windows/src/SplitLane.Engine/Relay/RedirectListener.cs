@@ -212,7 +212,7 @@ public sealed class RedirectListener : IAsyncDisposable
 
             var sourcePort = (ushort)remote.Port;
 
-            if (!_nat.TryGet(sourcePort, out var entry))
+            if (!_nat.TryGetRedirected(PortSlot.From(remote), out var entry))
             {
                 // Not a connection SplitLane redirected. See the type-level remarks: this is the
                 // check that stops the listener being an open proxy.

@@ -140,19 +140,21 @@ Covered by `RelayIntegrationTests.AConnectionFromAnUnknownPortIsRefusedRatherTha
 
 ### W-6 — NAT table collision on a reused source port
 
-**Severity: theoretical.**
+**Severity: resolved (SL-SEC-005, 2026-10-06).**
 
-The NAT table is keyed on the local port alone. A port is unique per protocol *per local address*, so
-two sockets bound to the same port on different local addresses would collide, and one application's
-connection could be attributed to another's rule.
+The NAT table used to be keyed on the local port alone and was recorded here as theoretical. It was
+not: a port is unique per protocol, per address family and per local address, so any process could
+open a socket on the same number in the other family (no `SO_REUSEADDR` needed) or on another of the
+machine's addresses, and its CONNECT, BIND or CLOSE overwrote or erased a selected application's
+decision - a silent DIRECT for its UDP, and a dropped NAT row for its TCP.
 
-Windows allocates ephemeral ports from a shared pool and the case requires a deliberate
-`SO_REUSEADDR` bind to a specific address, so it is theoretical rather than practical. It is recorded
-rather than defended against, because defending against it would mean keying on an address the
-redirect listener never sees.
-
-Entries expire after five minutes, which bounds the window in which a recycled port can be
-mis-attributed at all.
+Now TCP rows are keyed on family, local address and port; UDP decisions on family and port. Every
+row remembers the WinDivert endpoint id of the socket that made it, and only that socket's CLOSE
+removes it. A second socket on the same UDP slot can replace a decision only with one at least as
+strict, and a "leave alone" never replaces a refusal. Socket events from other processes' loopback
+sockets are ignored. The redirect listener and the reply path, which see only family and port after
+the rewrite, use an index that admits one redirected connection per slot; a second one is refused
+(dropped), never allowed to answer for the first.
 
 ### W-7 — The control channel is the trust boundary
 

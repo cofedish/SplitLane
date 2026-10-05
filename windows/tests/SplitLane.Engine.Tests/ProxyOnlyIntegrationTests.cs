@@ -62,7 +62,7 @@ public sealed class ProxyOnlyIntegrationTests
         using var client = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
         client.Bind(new IPEndPoint(IPAddress.Loopback, 0));
         var port = (ushort)((IPEndPoint)client.LocalEndPoint!).Port;
-        nat.Record(port, new NatEntry(IPAddress.Loopback, IPAddress.Loopback, originPort,
+        nat.Record(FlowKey.From(IPAddress.Loopback, port), new NatEntry(IPAddress.Loopback, IPAddress.Loopback, originPort,
             (uint)Environment.ProcessId, @"C:\Tests\client.exe", "Test client", null, DateTimeOffset.UtcNow)
         {
             Action = RouteAction.ProxyOnly,

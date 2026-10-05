@@ -111,13 +111,13 @@ public sealed class DomainPacketPolicyTests
         await using var pipeline = new DivertPipeline(nat, new DnsObserver(), new ProcessResolver(), new EngineStatistics(), () => engine);
         var flow = new FlowDescriptor(42, @"C:\Tests\client.exe", remote.ToString(), 443, FlowProtocol.Tcp, "api.example.com");
         pipeline.RecordTcpDecision(45000, source, remote, flow, engine.Decide(flow), null, engine);
-        nat.Close(45000);
+        nat.Close(FlowKey.From(source, 45000), endpointId: 0);
         var packet = Packet(source, remote, false);
         packet[33] = 0x11;
         var address = new WinDivertAddress { Outbound = true };
 
         Assert.Equal(DivertPipeline.PacketAction.Drop, pipeline.Classify(packet, ref address));
-        nat.RecordDirect(45000, remote, 443);
+        nat.RecordDirect(FlowKey.From(source, 45000), remote, 443);
         Assert.Equal(DivertPipeline.PacketAction.Forward, pipeline.Classify(packet, ref address));
     }
 

@@ -129,7 +129,7 @@ public sealed class RelayIntegrationTests
         // the divert layer guarantees by recording the entry at socket-connect time.
         client.Bind(new IPEndPoint(IPAddress.Loopback, 0));
         var sourcePort = (ushort)((IPEndPoint)client.LocalEndPoint!).Port;
-        nat.Record(sourcePort, entry);
+        nat.Record(FlowKey.From(IPAddress.Loopback, sourcePort), entry);
 
         await client.ConnectAsync(new IPEndPoint(IPAddress.Loopback, listener.Port));
         return client;

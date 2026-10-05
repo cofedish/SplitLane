@@ -680,7 +680,7 @@ public sealed class HttpProxyIntegrationTests
         client.Bind(new IPEndPoint(IPAddress.Loopback, 0));
         var sourcePort = (ushort)((IPEndPoint)client.LocalEndPoint!).Port;
 
-        nat.Record(sourcePort, new NatEntry(
+        nat.Record(FlowKey.From(IPAddress.Loopback, sourcePort), new NatEntry(
             IPAddress.Loopback,
             IPAddress.Loopback,
             echoPort,

@@ -48,6 +48,12 @@ public sealed record NatEntry(
 
     /// <summary>Matched application or destination rule, for diagnostics.</summary>
     public string? RuleKey { get; init; }
+
+    /// <summary>
+    /// The WinDivert endpoint id of the socket that made the connection, or 0 when unknown. Only a
+    /// CLOSE from that socket removes the entry (SL-SEC-005).
+    /// </summary>
+    public ulong EndpointId { get; init; }
 }
 
 /// <summary>What was decided about a connection that is not redirected.</summary>
@@ -74,17 +80,21 @@ public enum NatVerdict
 /// </summary>
 /// <remarks>
 /// <para>
-/// The key is the application's own local port. That is the only identifier that survives the
-/// rewrite: the engine changes both addresses and the destination port, but the source port is left
-/// alone precisely so that the return path and the redirect listener can both find the entry.
+/// Rows are keyed on the connection's local end - family, local address and local port
+/// (<see cref="FlowKey"/>) - which is what both the socket layer and an outbound packet carry. The key
+/// used to be the port alone, and a port is not unique across families or local addresses: any
+/// process could open a socket on the same number elsewhere and its CONNECT or CLOSE overwrote or
+/// erased a selected application's decision (SL-SEC-005, formerly accepted as W-6).
 /// </para>
 /// <para>
-/// A local port is unique per protocol per local address, not globally, so two sockets bound to the
-/// same port on different local addresses would collide here. Windows allocates ephemeral ports from
-/// a shared pool and the case requires a deliberate <c>SO_REUSEADDR</c> bind, so the collision is
-/// theoretical rather than practical; it is recorded in docs/THREAT_MODEL.md as W-6 rather
-/// than defended against, because defending against it would mean keying on an address the redirect
-/// listener never sees.
+/// A redirected connection is also indexed by <see cref="PortSlot"/> - family and port - because that
+/// is all that survives the rewrite: the redirect listener and the reply path see the application at
+/// a loopback address. A slot holds at most one redirected connection; a second one that would share
+/// it is refused rather than allowed to answer for the first.
+/// </para>
+/// <para>
+/// Every row remembers the WinDivert endpoint id of the socket that produced it, and a socket CLOSE
+/// removes only rows that socket owns.
 /// </para>
 /// <para>
 /// Entries expire. Without expiry, a table keyed on a 16-bit port would accumulate stale rows for
@@ -94,9 +104,11 @@ public enum NatVerdict
 /// </remarks>
 public sealed class NatTable(TimeProvider? timeProvider = null)
 {
-    private readonly ConcurrentDictionary<ushort, NatEntry> _entries = new();
-    private readonly ConcurrentDictionary<ushort, DirectDecision> _direct = new();
-    private readonly ConcurrentDictionary<ushort, DirectDecision> _closedStrict = new();
+    private readonly ConcurrentDictionary<FlowKey, NatEntry> _entries = new();
+    private readonly ConcurrentDictionary<PortSlot, FlowKey> _redirected = new();
+    private readonly ConcurrentDictionary<FlowKey, DirectDecision> _direct = new();
+    private readonly ConcurrentDictionary<FlowKey, DirectDecision> _closedStrict = new();
+    private readonly Lock _gate = new();
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
 
     /// <summary>
@@ -112,32 +124,65 @@ public sealed class NatTable(TimeProvider? timeProvider = null)
     /// <summary>Number of live entries.</summary>
     public int Count => _entries.Count;
 
-    /// <summary>Records where a connection was really going, replacing any stale row on that port.</summary>
-    public void Record(ushort localPort, NatEntry entry)
+    /// <summary>
+    /// Records where a connection was really going, replacing any stale row for the same local end.
+    /// </summary>
+    /// <returns>
+    /// False when another live redirected connection already holds the same family and port: the two
+    /// could not be told apart after the rewrite, so the newcomer is refused rather than allowed to
+    /// answer for the other.
+    /// </returns>
+    public bool Record(FlowKey key, NatEntry entry)
     {
         ArgumentNullException.ThrowIfNull(entry);
-        _closedStrict.TryRemove(localPort, out _);
-        _entries[localPort] = entry;
+
+        lock (_gate)
+        {
+            if (_redirected.TryGetValue(key.Slot, out var holder) && holder != key && IsLive(holder))
+            {
+                return false;
+            }
+
+            _closedStrict.TryRemove(key, out _);
+            _entries[key] = entry;
+            _redirected[key.Slot] = key;
+            return true;
+        }
     }
 
     /// <summary>Looks up a live entry; strict policy remains until socket CLOSE or routing shutdown.</summary>
-    public bool TryGet(ushort localPort, out NatEntry entry)
+    public bool TryGet(FlowKey key, out NatEntry entry)
     {
-        if (!_entries.TryGetValue(localPort, out var found))
+        if (!_entries.TryGetValue(key, out var found))
         {
             entry = null!;
             return false;
         }
 
-        if (found.Action != RouteAction.ProxyOnly && _time.GetUtcNow() - found.CreatedAt > EntryLifetime)
+        if (Expired(found))
         {
-            _entries.TryRemove(localPort, out _);
+            RemoveEntry(key, found);
             entry = null!;
             return false;
         }
 
         entry = found;
         return true;
+    }
+
+    /// <summary>
+    /// Looks up the redirected connection holding a family-and-port slot - what the redirect listener
+    /// and the reply path can see.
+    /// </summary>
+    public bool TryGetRedirected(PortSlot slot, out NatEntry entry)
+    {
+        if (_redirected.TryGetValue(slot, out var key) && TryGet(key, out entry))
+        {
+            return true;
+        }
+
+        entry = null!;
+        return false;
     }
 
     /// <summary>Records that a connection was decided against proxying.</summary>
@@ -156,8 +201,8 @@ public sealed class NatTable(TimeProvider? timeProvider = null)
     /// un-redirected.
     /// </para>
     /// </remarks>
-    public void RecordDirect(ushort localPort, IPAddress destination, ushort destinationPort) =>
-        RecordVerdict(localPort, destination, destinationPort, NatVerdict.Direct);
+    public void RecordDirect(FlowKey key, IPAddress destination, ushort destinationPort, ulong endpointId = 0) =>
+        RecordVerdict(key, destination, destinationPort, NatVerdict.Direct, endpointId);
 
     /// <summary>
     /// Records a decision that produced no redirect, and what the packet loop must do about it.
@@ -165,40 +210,58 @@ public sealed class NatTable(TimeProvider? timeProvider = null)
     /// <remarks>
     /// Block and Pending used to be recorded as plain "leave alone", which made a TCP connection a
     /// rule blocked leave the machine DIRECT - counted as blocked, and delivered. The verdict is what
-    /// makes the packet loop actually drop it.
+    /// makes the packet loop actually drop it. A "leave alone" from another socket never replaces a
+    /// live refusal: two sockets share a local end only through address reuse, and when they do, the
+    /// stricter answer stands.
     /// </remarks>
-    public void RecordVerdict(ushort localPort, IPAddress destination, ushort destinationPort, NatVerdict verdict)
+    public void RecordVerdict(
+        FlowKey key, IPAddress destination, ushort destinationPort, NatVerdict verdict, ulong endpointId = 0)
     {
         ArgumentNullException.ThrowIfNull(destination);
-        _closedStrict.TryRemove(localPort, out _);
-        _direct[localPort] = new DirectDecision(destination, destinationPort, _time.GetUtcNow(), verdict);
+
+        lock (_gate)
+        {
+            if (verdict == NatVerdict.Direct &&
+                _direct.TryGetValue(key, out var existing) &&
+                existing.Verdict != NatVerdict.Direct &&
+                existing.EndpointId != endpointId)
+            {
+                return;
+            }
+
+            _closedStrict.TryRemove(key, out _);
+            _direct[key] = new DirectDecision(destination, destinationPort, _time.GetUtcNow(), verdict, endpointId);
+        }
     }
 
     /// <summary>
     /// Replaces a pending verdict with the decision that followed it, but only if the pending one is
-    /// still the row on that port. A socket that closed, or a port since reused for another
+    /// still the row for that local end. A socket that closed, or a port since reused for another
     /// connection, is left alone.
     /// </summary>
-    public bool TryResolvePending(ushort localPort, IPAddress destination, ushort destinationPort)
+    public bool TryResolvePending(FlowKey key, IPAddress destination, ushort destinationPort)
     {
-        return _direct.TryGetValue(localPort, out var found) &&
-               found.Verdict == NatVerdict.Pending &&
-               found.Port == destinationPort &&
-               found.Destination.Equals(destination) &&
-               _direct.TryRemove(new KeyValuePair<ushort, DirectDecision>(localPort, found));
+        lock (_gate)
+        {
+            return _direct.TryGetValue(key, out var found) &&
+                   found.Verdict == NatVerdict.Pending &&
+                   found.Port == destinationPort &&
+                   found.Destination.Equals(destination) &&
+                   _direct.TryRemove(new KeyValuePair<FlowKey, DirectDecision>(key, found));
+        }
     }
 
     /// <summary>Looks up a live non-redirect decision with its verdict.</summary>
     public bool TryGetVerdict(
-        ushort localPort, out IPAddress destination, out ushort destinationPort, out NatVerdict verdict)
+        FlowKey key, out IPAddress destination, out ushort destinationPort, out NatVerdict verdict)
     {
         verdict = NatVerdict.Direct;
-        if (!TryGetDirect(localPort, out destination, out destinationPort))
+        if (!TryGetDirect(key, out destination, out destinationPort))
         {
             return false;
         }
 
-        verdict = _direct.TryGetValue(localPort, out var found) ? found.Verdict : NatVerdict.Direct;
+        verdict = _direct.TryGetValue(key, out var found) ? found.Verdict : NatVerdict.Direct;
         return true;
     }
 
@@ -206,19 +269,19 @@ public sealed class NatTable(TimeProvider? timeProvider = null)
     /// Looks up a live decision that produced no redirect - of any verdict - treating an expired one
     /// as absent.
     /// </summary>
-    public bool TryGetDirect(ushort localPort, out IPAddress destination, out ushort destinationPort)
+    public bool TryGetDirect(FlowKey key, out IPAddress destination, out ushort destinationPort)
     {
         destination = null!;
         destinationPort = 0;
 
-        if (!_direct.TryGetValue(localPort, out var found))
+        if (!_direct.TryGetValue(key, out var found))
         {
             return false;
         }
 
         if (found.Verdict == NatVerdict.Direct && _time.GetUtcNow() - found.CreatedAt > EntryLifetime)
         {
-            _direct.TryRemove(localPort, out _);
+            _direct.TryRemove(new KeyValuePair<FlowKey, DirectDecision>(key, found));
             return false;
         }
 
@@ -227,72 +290,92 @@ public sealed class NatTable(TimeProvider? timeProvider = null)
         return true;
     }
 
-    /// <summary>Forgets a connection, normally when its socket closes.</summary>
-    /// <remarks>
-    /// Both halves go together. A close that forgot only one of them would leave the other to answer
-    /// for whichever connection inherits the port next.
-    /// </remarks>
-    public bool Remove(ushort localPort)
+    /// <summary>Forgets a connection outright. Used for explicit cleanup, never for a socket CLOSE.</summary>
+    public bool Remove(FlowKey key)
     {
-        var removedDirect = _direct.TryRemove(localPort, out _);
-        return _entries.TryRemove(localPort, out _) || removedDirect;
+        lock (_gate)
+        {
+            var removedDirect = _direct.TryRemove(key, out _);
+            var removedEntry = _entries.TryRemove(key, out _);
+            _redirected.TryRemove(new KeyValuePair<PortSlot, FlowKey>(key.Slot, key));
+            return removedEntry || removedDirect;
+        }
     }
 
     /// <summary>
-    /// Socket CLOSE precedes some final kernel packets. Keep a bounded refusal tombstone so
-    /// FIN/ACK/RST cannot escape DIRECT after forgetting a strict connection. A new CONNECT
-    /// replaces it; ordinary Remove remains available for explicit cleanup.
+    /// Forgets what a closing socket owned. Rows another socket recorded for the same local end are
+    /// left alone (SL-SEC-005).
     /// </summary>
-    public void Close(ushort localPort)
+    /// <remarks>
+    /// Socket CLOSE precedes some final kernel packets. A bounded refusal tombstone keeps FIN/ACK/RST
+    /// of a strict connection from escaping DIRECT after its row is forgotten; a new CONNECT replaces it.
+    /// </remarks>
+    /// <param name="key">The closing socket's local end.</param>
+    /// <param name="endpointId">The closing socket's endpoint id.</param>
+    public void Close(FlowKey key, ulong endpointId)
     {
-        if (_entries.TryGetValue(localPort, out var entry) && entry.Action == RouteAction.ProxyOnly)
+        lock (_gate)
         {
-            _closedStrict[localPort] = new DirectDecision(entry.OriginalDestination,
-                entry.OriginalDestinationPort, _time.GetUtcNow(), NatVerdict.Block);
+            if (_entries.TryGetValue(key, out var entry) && SameSocket(entry.EndpointId, endpointId))
+            {
+                if (entry.Action == RouteAction.ProxyOnly)
+                {
+                    _closedStrict[key] = new DirectDecision(entry.OriginalDestination,
+                        entry.OriginalDestinationPort, _time.GetUtcNow(), NatVerdict.Block, endpointId);
+                }
+
+                RemoveEntry(key, entry);
+            }
+
+            if (_direct.TryGetValue(key, out var decision) && SameSocket(decision.EndpointId, endpointId))
+            {
+                if (decision.Verdict != NatVerdict.Direct)
+                {
+                    _closedStrict[key] = decision with { CreatedAt = _time.GetUtcNow() };
+                }
+
+                _direct.TryRemove(new KeyValuePair<FlowKey, DirectDecision>(key, decision));
+            }
         }
-        else if (_direct.TryGetValue(localPort, out var decision) && decision.Verdict != NatVerdict.Direct)
-        {
-            _closedStrict[localPort] = decision with { CreatedAt = _time.GetUtcNow() };
-        }
-        Remove(localPort);
     }
 
     /// <summary>A final packet of a closed strict connection must still be refused.</summary>
-    public bool IsClosedStrict(ushort localPort, IPAddress destination, ushort destinationPort) =>
-        _closedStrict.TryGetValue(localPort, out var found) &&
+    public bool IsClosedStrict(FlowKey key, IPAddress destination, ushort destinationPort) =>
+        _closedStrict.TryGetValue(key, out var found) &&
         _time.GetUtcNow() - found.CreatedAt <= EntryLifetime &&
         found.Port == destinationPort && found.Destination.Equals(destination);
 
     /// <summary>
     /// Drops expired non-strict rows. ProxyOnly and refusal rows remain until socket CLOSE or
-    /// routing shutdown so expiry cannot turn a protected flow into DIRECT. Port keys bound size.
+    /// routing shutdown so expiry cannot turn a protected flow into DIRECT.
     /// </summary>
     public int Sweep()
     {
         var cutoff = _time.GetUtcNow() - EntryLifetime;
         var removed = 0;
 
-        foreach (var (port, entry) in _entries)
+        foreach (var (key, entry) in _entries)
         {
-            if (entry.Action != RouteAction.ProxyOnly && entry.CreatedAt < cutoff && _entries.TryRemove(port, out _))
+            if (Expired(entry) && RemoveEntry(key, entry))
             {
                 removed++;
             }
         }
 
-        foreach (var (port, decision) in _direct)
+        foreach (var (key, decision) in _direct)
         {
-            if (decision.Verdict == NatVerdict.Direct && decision.CreatedAt < cutoff && _direct.TryRemove(port, out _))
+            if (decision.Verdict == NatVerdict.Direct && decision.CreatedAt < cutoff &&
+                _direct.TryRemove(new KeyValuePair<FlowKey, DirectDecision>(key, decision)))
             {
                 removed++;
             }
         }
 
-        foreach (var (port, decision) in _closedStrict)
+        foreach (var (key, decision) in _closedStrict)
         {
             if (decision.CreatedAt < cutoff)
             {
-                _closedStrict.TryRemove(new KeyValuePair<ushort, DirectDecision>(port, decision));
+                _closedStrict.TryRemove(new KeyValuePair<FlowKey, DirectDecision>(key, decision));
             }
         }
 
@@ -302,16 +385,43 @@ public sealed class NatTable(TimeProvider? timeProvider = null)
     /// <summary>Forgets everything. Used when routing stops.</summary>
     public void Clear()
     {
-        _entries.Clear();
-        _direct.Clear();
-        _closedStrict.Clear();
+        lock (_gate)
+        {
+            _entries.Clear();
+            _redirected.Clear();
+            _direct.Clear();
+            _closedStrict.Clear();
+        }
+    }
+
+    /// <summary>
+    /// Whether a recorded owner and a closing socket are the same socket. An owner of 0 was recorded
+    /// without an endpoint id (tests, diagnostics) and is matched by any close.
+    /// </summary>
+    private static bool SameSocket(ulong owner, ulong closing) => owner == 0 || owner == closing;
+
+    private bool Expired(NatEntry entry) =>
+        entry.Action != RouteAction.ProxyOnly && _time.GetUtcNow() - entry.CreatedAt > EntryLifetime;
+
+    private bool IsLive(FlowKey key) => _entries.TryGetValue(key, out var entry) && !Expired(entry);
+
+    private bool RemoveEntry(FlowKey key, NatEntry entry)
+    {
+        if (!_entries.TryRemove(new KeyValuePair<FlowKey, NatEntry>(key, entry)))
+        {
+            return false;
+        }
+
+        _redirected.TryRemove(new KeyValuePair<PortSlot, FlowKey>(key.Slot, key));
+        return true;
     }
 
     private readonly record struct DirectDecision(
         IPAddress Destination,
         ushort Port,
         DateTimeOffset CreatedAt,
-        NatVerdict Verdict = NatVerdict.Direct);
+        NatVerdict Verdict = NatVerdict.Direct,
+        ulong EndpointId = 0);
 
     /// <summary>Builds an entry from a routing decision and a socket-layer event.</summary>
     public static NatEntry EntryFor(
