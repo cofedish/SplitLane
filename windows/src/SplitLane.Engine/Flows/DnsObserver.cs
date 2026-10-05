@@ -6,6 +6,16 @@ using SplitLane.Core.Rules;
 
 namespace SplitLane.Engine.Flows;
 
+/// <summary>Which transport a DNS message travelled over.</summary>
+public enum DnsTransport
+{
+    /// <summary>UDP, one message per datagram.</summary>
+    Udp,
+
+    /// <summary>TCP, length-prefixed messages.</summary>
+    Tcp,
+}
+
 /// <summary>
 /// Correlates addresses with bounded, TTL-limited DNS evidence.
 /// </summary>
@@ -21,17 +31,52 @@ namespace SplitLane.Engine.Flows;
 /// live names on one IP are ambiguous; the observer does not guess the application's intended name.
 /// </para>
 /// <para>
+/// <b>A response is evidence only if it answers a query this machine was seen to send</b> (SL-SEC-003).
+/// Its transport, both endpoints (reversed), transaction id, question name, type and class must match
+/// a query observed less than <see cref="QueryLifetime"/> ago, and the query is consumed by the first
+/// matching answer. A packet that merely comes from port 53 - forged by a local process on loopback, or
+/// by a host on the LAN - teaches nothing. A resolver on loopback is believed only if Windows is
+/// configured to use it (<see cref="IsConfiguredResolver"/>): on loopback a local process can play both
+/// the client and the server.
+/// </para>
+/// <para>
+/// What this does not and cannot establish: that the resolver told the truth, or that a name the
+/// resolver vouched for belongs to whoever asked. A local process may still ask the real resolver about
+/// a domain it controls; the answer is genuine DNS and is learned as such. When that makes one address
+/// carry two names, <see cref="Lookup"/> reports neither.
+/// </para>
+/// <para>
 /// It does <b>not</b> make DNS private. The query still left this machine in the clear. That
 /// limitation is real, is the same one macOS has, and is documented rather than papered over.
 /// </para>
 /// </remarks>
 public sealed class DnsObserver(TimeProvider? timeProvider = null)
 {
+    private const ushort TypeA = 1;
+    private const ushort TypeCname = 5;
+    private const ushort TypeAaaa = 28;
+    private const ushort ClassIn = 1;
+
     private readonly ConcurrentDictionary<IPAddress, Entry[]> _names = new();
+    private readonly Dictionary<string, HashSet<IPAddress>> _addressesByName = new(StringComparer.Ordinal);
+    private readonly Queue<IPAddress> _insertionOrder = new();
+    private readonly ConcurrentDictionary<QueryKey, DateTimeOffset> _pending = new();
     private readonly Lock _writeGate = new();
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
 
     private readonly record struct Entry(string Hostname, DateTimeOffset ExpiresAt);
+
+    /// <summary>Everything a response has to match to be accepted as the answer to a query.</summary>
+    private readonly record struct QueryKey(
+        DnsTransport Transport,
+        IPAddress Client,
+        ushort ClientPort,
+        IPAddress Server,
+        ushort ServerPort,
+        ushort Id,
+        string Name,
+        ushort Type,
+        ushort Class);
 
     /// <summary>How long a remembered name is trusted.</summary>
     /// <remarks>
@@ -44,10 +89,36 @@ public sealed class DnsObserver(TimeProvider? timeProvider = null)
     /// <summary>Upper bound on remembered names, so a hostile resolver cannot grow the table forever.</summary>
     public int MaxEntries { get; init; } = 8192;
 
+    /// <summary>How long a query waits for its answer.</summary>
+    /// <remarks>
+    /// The Windows DNS client gives up on a server after a few seconds and retries with a new
+    /// transaction id, so an answer older than this answers nothing anyone is still waiting for.
+    /// </remarks>
+    public TimeSpan QueryLifetime { get; init; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>Upper bound on queries awaiting an answer.</summary>
+    /// <remarks>
+    /// Far beyond what a machine has in flight at once (the DNS client caches, and retries with
+    /// backoff), and small enough that a flood of queries costs a bounded amount of memory. When full,
+    /// expired queries are dropped first; a new query that still does not fit is not tracked, so its
+    /// answer teaches nothing - the conservative direction.
+    /// </remarks>
+    public int MaxPendingQueries { get; init; } = 4096;
+
+    /// <summary>
+    /// Whether a loopback address is one of the machine's configured DNS servers. When null, no
+    /// loopback resolver is believed.
+    /// </summary>
+    public Func<IPAddress, bool>? IsConfiguredResolver { get; init; }
+
     /// <summary>Number of remembered addresses.</summary>
     public int Count => _names.Count;
 
+    /// <summary>Number of queries waiting for an answer.</summary>
+    public int PendingQueryCount => _pending.Count;
+
     /// <summary>Records that an address answers to a name.</summary>
+    /// <remarks>Trusted input only: tests and diagnostics. Packets never reach this.</remarks>
     public void Record(IPAddress address, string hostname)
     {
         ArgumentNullException.ThrowIfNull(address);
@@ -96,10 +167,13 @@ public sealed class DnsObserver(TimeProvider? timeProvider = null)
         lock (_writeGate)
         {
             _names.Clear();
+            _addressesByName.Clear();
+            _insertionOrder.Clear();
+            _pending.Clear();
         }
     }
 
-    /// <summary>Removes expired associations periodically; readers see immutable arrays.</summary>
+    /// <summary>Removes expired associations and queries periodically; readers see immutable arrays.</summary>
     public void Sweep()
     {
         lock (_writeGate)
@@ -110,94 +184,157 @@ public sealed class DnsObserver(TimeProvider? timeProvider = null)
                 var live = entries.Where(e => e.ExpiresAt > now).ToArray();
                 if (live.Length == 0)
                 {
-                    _names.TryRemove(address, out _);
+                    RemoveAddress(address);
                 }
                 else if (live.Length != entries.Length)
                 {
+                    foreach (var gone in entries.Where(e => e.ExpiresAt <= now))
+                    {
+                        Unindex(gone.Hostname, address);
+                    }
+
                     _names[address] = live;
                 }
             }
-        }
-    }
 
-    private void Add(IPAddress address, string hostname, DateTimeOffset expiresAt)
-    {
-        if (MaxEntries <= 0 || expiresAt <= _time.GetUtcNow())
-        {
-            return;
+            SweepQueries(now);
         }
-
-        if (!_names.ContainsKey(address) && _names.Count >= MaxEntries)
-        {
-            Sweep();
-            if (_names.Count >= MaxEntries)
-            {
-                var oldest = _names.MinBy(pair => pair.Value.Max(e => e.ExpiresAt));
-                _names.TryRemove(oldest.Key, out _);
-            }
-        }
-
-        var previous = _names.TryGetValue(address, out var entries) ? entries : [];
-        var live = previous.Where(e => e.ExpiresAt > _time.GetUtcNow() && e.Hostname != hostname).ToArray();
-        // Bound aliases per IP too. Saturated evidence stays ambiguous until the latest TTL expires.
-        if (live.Length >= 16)
-        {
-            _names[address] = [new Entry("", live.Max(e => e.ExpiresAt)), new Entry("?", expiresAt)];
-            return;
-        }
-        _names[address] = [.. live, new Entry(hostname, expiresAt)];
     }
 
     /// <summary>
-    /// Parses a DNS response and records every A and AAAA answer.
+    /// Notes a query on its way to a resolver, so that its answer can be recognised.
     /// </summary>
+    /// <returns>Whether the query is now awaiting an answer.</returns>
+    public bool ObserveQuery(DnsTransport transport, IPEndPoint client, IPEndPoint server, ReadOnlySpan<byte> message)
+    {
+        ArgumentNullException.ThrowIfNull(client);
+        ArgumentNullException.ThrowIfNull(server);
+
+        if (!IsBelievableResolver(server.Address) ||
+            !TryReadHeader(message, expectResponse: false, out var id, out var offset) ||
+            !TryReadQuestion(message, ref offset, out var name, out var type, out var recordClass) ||
+            recordClass != ClassIn || type is not (TypeA or TypeAaaa))
+        {
+            return false;
+        }
+
+        var key = new QueryKey(
+            transport, client.Address, (ushort)client.Port, server.Address, (ushort)server.Port, id, name, type, recordClass);
+
+        var now = _time.GetUtcNow();
+        if (_pending.Count >= MaxPendingQueries)
+        {
+            lock (_writeGate)
+            {
+                SweepQueries(now);
+            }
+
+            if (_pending.Count >= MaxPendingQueries)
+            {
+                return false;
+            }
+        }
+
+        _pending[key] = now + QueryLifetime;
+        return true;
+    }
+
+    /// <summary>
+    /// Learns from a response, if and only if it answers a query observed with
+    /// <see cref="ObserveQuery"/>.
+    /// </summary>
+    /// <returns>How many addresses were learned.</returns>
     /// <remarks>
-    /// A deliberately small parser: it reads the question name, walks the answer section, and takes
-    /// only A and AAAA records. Everything else — authority, additional, SRV, CNAME chains beyond the
-    /// owner name — is skipped, because none of it changes which name to hand a SOCKS5 server.
-    ///
-    /// <para>
-    /// Every offset is bounds-checked against the datagram that actually arrived, and compression
+    /// Every offset is bounds-checked against the message that actually arrived, and compression
     /// pointers are followed with a hard jump limit. A DNS response is attacker-controlled input
     /// arriving in an elevated process, so a malformed one must produce "nothing learned", never a
     /// read past the buffer and never an infinite loop.
-    /// </para>
     /// </remarks>
-    public int IngestResponse(ReadOnlySpan<byte> datagram)
+    public int IngestResponse(DnsTransport transport, IPEndPoint server, IPEndPoint client, ReadOnlySpan<byte> message)
     {
-        if (datagram.Length < 12)
+        ArgumentNullException.ThrowIfNull(server);
+        ArgumentNullException.ThrowIfNull(client);
+
+        if (!TryReadHeader(message, expectResponse: true, out var id, out var offset))
         {
             return 0;
         }
 
-        var flags = BinaryPrimitives.ReadUInt16BigEndian(datagram[2..4]);
-        var isResponse = (flags & 0x8000) != 0;
+        var flags = BinaryPrimitives.ReadUInt16BigEndian(message[2..4]);
         var responseCode = flags & 0x000F;
-        if (!isResponse || responseCode != 0 || (flags & 0x0200) != 0)
+        if (responseCode != 0 || (flags & 0x0200) != 0)
         {
             return 0;
         }
 
-        var questionCount = BinaryPrimitives.ReadUInt16BigEndian(datagram[4..6]);
-        var answerCount = BinaryPrimitives.ReadUInt16BigEndian(datagram[6..8]);
-        if (questionCount != 1 || answerCount == 0 || answerCount > 256)
+        if (!TryReadQuestion(message, ref offset, out var questionName, out var type, out var recordClass))
         {
             return 0;
         }
 
-        var offset = 12;
+        var key = new QueryKey(
+            transport, client.Address, (ushort)client.Port, server.Address, (ushort)server.Port, id, questionName, type, recordClass);
 
-        if (!TryReadName(datagram, ref offset, out var questionName) || offset + 4 > datagram.Length ||
-            !DomainPattern.TryNormalize(questionName, out questionName))
+        // Consumed by the first matching answer: a second, possibly forged, "answer" to the same
+        // query finds nothing to answer.
+        if (!_pending.TryRemove(key, out var deadline) || deadline <= _time.GetUtcNow())
         {
             return 0;
         }
 
-        if (BinaryPrimitives.ReadUInt16BigEndian(datagram.Slice(offset + 2, 2)) != 1)
+        return Learn(message, offset, questionName);
+    }
+
+    private bool IsBelievableResolver(IPAddress server) =>
+        !IPAddress.IsLoopback(server) || (IsConfiguredResolver?.Invoke(server) ?? false);
+
+    private static bool TryReadHeader(ReadOnlySpan<byte> message, bool expectResponse, out ushort id, out int offset)
+    {
+        id = 0;
+        offset = 12;
+
+        if (message.Length < 12)
         {
-            return 0;
+            return false;
         }
+
+        id = BinaryPrimitives.ReadUInt16BigEndian(message[..2]);
+        var flags = BinaryPrimitives.ReadUInt16BigEndian(message[2..4]);
+        var isResponse = (flags & 0x8000) != 0;
+        var opcode = (flags >> 11) & 0x0F;
+        var questionCount = BinaryPrimitives.ReadUInt16BigEndian(message[4..6]);
+        var answerCount = BinaryPrimitives.ReadUInt16BigEndian(message[6..8]);
+
+        if (isResponse != expectResponse || opcode != 0 || questionCount != 1)
+        {
+            return false;
+        }
+
+        return expectResponse ? answerCount is > 0 and <= 256 : answerCount == 0;
+    }
+
+    private static bool TryReadQuestion(
+        ReadOnlySpan<byte> message, ref int offset, out string name, out ushort type, out ushort recordClass)
+    {
+        type = 0;
+        recordClass = 0;
+
+        if (!TryReadName(message, ref offset, out name) || offset + 4 > message.Length ||
+            !DomainPattern.TryNormalize(name, out name))
+        {
+            return false;
+        }
+
+        type = BinaryPrimitives.ReadUInt16BigEndian(message.Slice(offset, 2));
+        recordClass = BinaryPrimitives.ReadUInt16BigEndian(message.Slice(offset + 2, 2));
         offset += 4;
+        return true;
+    }
+
+    /// <summary>Walks the answer section of a response already matched to its query.</summary>
+    private int Learn(ReadOnlySpan<byte> datagram, int offset, string questionName)
+    {
+        var answerCount = BinaryPrimitives.ReadUInt16BigEndian(datagram[6..8]);
         var addresses = new List<(string Owner, IPAddress Address, uint Ttl)>();
         var aliases = new Dictionary<string, (string Target, uint Ttl)>(StringComparer.Ordinal);
 
@@ -220,17 +357,17 @@ public sealed class DnsObserver(TimeProvider? timeProvider = null)
                 return 0;
             }
 
-            switch (recordClass == 1 ? type : 0)
+            switch (recordClass == ClassIn ? type : 0)
             {
-                case 1 when dataLength == 4:
+                case TypeA when dataLength == 4:
                     addresses.Add((owner, new IPAddress(datagram.Slice(offset, 4)), ttl));
                     break;
 
-                case 28 when dataLength == 16:
+                case TypeAaaa when dataLength == 16:
                     addresses.Add((owner, new IPAddress(datagram.Slice(offset, 16)), ttl));
                     break;
 
-                case 5:
+                case TypeCname:
                     var cnameOffset = offset;
                     if (!TryReadName(datagram, ref cnameOffset, out var target) || cnameOffset != offset + dataLength ||
                         !DomainPattern.TryNormalize(target, out target))
@@ -261,22 +398,30 @@ public sealed class DnsObserver(TimeProvider? timeProvider = null)
         var learned = addresses.Where(a => reachable.ContainsKey(a.Owner)).ToArray();
         lock (_writeGate)
         {
-            // Replace only the families answered, preserving an AAAA answer when A is refreshed.
+            // Replace only the families answered, preserving an AAAA answer when A is refreshed. The
+            // index makes this proportional to what the name had, not to the whole table: a burst of
+            // answers can no longer stall the packet loop that calls this.
             var families = learned.Select(a => a.Address.AddressFamily).ToHashSet();
-            foreach (var (address, entries) in _names)
+            if (_addressesByName.TryGetValue(questionName, out var previous))
             {
-                if (!families.Contains(address.AddressFamily))
+                foreach (var address in previous.Where(a => families.Contains(a.AddressFamily)).ToArray())
                 {
-                    continue;
-                }
-                var kept = entries.Where(e => e.Hostname != questionName).ToArray();
-                if (kept.Length == 0)
-                {
-                    _names.TryRemove(address, out _);
-                }
-                else
-                {
-                    _names[address] = kept;
+                    if (!_names.TryGetValue(address, out var entries))
+                    {
+                        continue;
+                    }
+
+                    var kept = entries.Where(e => e.Hostname != questionName).ToArray();
+                    Unindex(questionName, address);
+
+                    if (kept.Length == 0)
+                    {
+                        _names.TryRemove(address, out _);
+                    }
+                    else
+                    {
+                        _names[address] = kept;
+                    }
                 }
             }
 
@@ -289,6 +434,106 @@ public sealed class DnsObserver(TimeProvider? timeProvider = null)
             }
         }
         return learned.Length;
+    }
+
+    private void Add(IPAddress address, string hostname, DateTimeOffset expiresAt)
+    {
+        if (MaxEntries <= 0 || expiresAt <= _time.GetUtcNow())
+        {
+            return;
+        }
+
+        if (!_names.ContainsKey(address))
+        {
+            // Evict in insertion order rather than scanning for the oldest: constant work per add,
+            // however full the table is.
+            while (_names.Count >= MaxEntries && _insertionOrder.TryDequeue(out var oldest))
+            {
+                RemoveAddress(oldest);
+            }
+
+            _insertionOrder.Enqueue(address);
+
+            // The queue can hold addresses already removed by expiry; keep it from outgrowing the table.
+            if (_insertionOrder.Count > MaxEntries * 2)
+            {
+                var stillPresent = _insertionOrder.Where(_names.ContainsKey).Distinct().ToArray();
+                _insertionOrder.Clear();
+                foreach (var kept in stillPresent)
+                {
+                    _insertionOrder.Enqueue(kept);
+                }
+
+                if (!_insertionOrder.Contains(address))
+                {
+                    _insertionOrder.Enqueue(address);
+                }
+            }
+        }
+
+        var now = _time.GetUtcNow();
+        var previous = _names.TryGetValue(address, out var entries) ? entries : [];
+        var live = previous.Where(e => e.ExpiresAt > now && e.Hostname != hostname).ToArray();
+
+        foreach (var expired in previous.Where(e => e.ExpiresAt <= now && e.Hostname != hostname))
+        {
+            Unindex(expired.Hostname, address);
+        }
+
+        // Bound aliases per IP too. Saturated evidence stays ambiguous until the latest TTL expires.
+        if (live.Length >= 16)
+        {
+            foreach (var entry in previous)
+            {
+                Unindex(entry.Hostname, address);
+            }
+
+            _names[address] = [new Entry("", live.Max(e => e.ExpiresAt)), new Entry("?", expiresAt)];
+            return;
+        }
+
+        _names[address] = [.. live, new Entry(hostname, expiresAt)];
+        Index(hostname, address);
+    }
+
+    private void RemoveAddress(IPAddress address)
+    {
+        if (_names.TryRemove(address, out var entries))
+        {
+            foreach (var entry in entries)
+            {
+                Unindex(entry.Hostname, address);
+            }
+        }
+    }
+
+    private void Index(string hostname, IPAddress address)
+    {
+        if (!_addressesByName.TryGetValue(hostname, out var set))
+        {
+            _addressesByName[hostname] = set = [];
+        }
+
+        set.Add(address);
+    }
+
+    private void Unindex(string hostname, IPAddress address)
+    {
+        if (_addressesByName.TryGetValue(hostname, out var set) && set.Remove(address) && set.Count == 0)
+        {
+            _addressesByName.Remove(hostname);
+        }
+    }
+
+    private void SweepQueries(DateTimeOffset now)
+    {
+        foreach (var (key, deadline) in _pending)
+        {
+            if (deadline <= now)
+            {
+                _pending.TryRemove(key, out _);
+            }
+        }
     }
 
     /// <summary>Reads a possibly compressed DNS name, advancing past it in the wire stream.</summary>

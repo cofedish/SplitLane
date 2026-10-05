@@ -8,6 +8,7 @@ using SplitLane.Core.Proxy.Socks5;
 using SplitLane.Core.Rules;
 using SplitLane.Engine.Divert;
 using SplitLane.Engine.Flows;
+using SplitLane.Engine.Net;
 using SplitLane.Engine.Relay;
 using SplitLane.Engine.Update;
 using SplitLane.Platform;
@@ -60,7 +61,7 @@ public sealed class EngineRuntime : IAsyncDisposable
     private readonly ConfigurationStore _store;
     private readonly EngineOptions _options;
     private readonly NatTable _nat = new();
-    private readonly DnsObserver _dns = new();
+    private readonly DnsObserver _dns = new() { IsConfiguredResolver = SystemResolvers.Contains };
     private readonly ImageCatalog _images;
     private readonly ProcessResolver _processes;
     private readonly EngineStatistics _statistics = new();

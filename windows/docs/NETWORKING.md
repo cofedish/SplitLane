@@ -203,9 +203,14 @@ Each clause earns its place:
    took the packets captured in a minute from 618,646 to 8,315. If no block can be reserved, UDP is
    refused rather than relayed, and the clause is left out.
 
-**DNS observer** — a separate sniffing handle, `inbound and udp and udp.SrcPort = 53`. Separate on
-purpose: hostname recovery is an optimisation, and a parser bug in it must not be able to affect
-packet delivery.
+**DNS observer** — part of the network handle: answers from port 53 in any direction, plus
+queries to a loopback resolver (queries to remote resolvers already arrive through the outbound
+clauses). The observer learns an address's name only from an answer that matches a query it saw
+leave - same transport, reversed endpoints, transaction id, question name, type and class - within
+ten seconds, and the first matching answer consumes the query (SL-SEC-003). A loopback resolver is
+believed only if Windows is configured to use it, because on loopback any local process can both ask
+and answer. A packet that merely comes from port 53 teaches nothing. Pending queries are bounded
+(4,096) and the work per answer is proportional to the answer, not to the table.
 
 ## 5. What this costs
 

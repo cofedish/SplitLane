@@ -255,6 +255,9 @@ public sealed class DivertPipeline : IAsyncDisposable
     /// its lane, or dropped rather than allowed to escape. This is the expensive clause, and it is here
     /// because failing closed matters more than throughput (ADR W-0012).</item>
     /// <item>Outbound loopback UDP from the reserved lane block — the relayed replies.</item>
+    /// <item>DNS: answers from port 53 in any direction, and queries to a loopback resolver. A
+    /// query is what an answer is checked against (SL-SEC-003); queries to a remote resolver already
+    /// arrive through the outbound clauses above.</item>
     /// </list>
     /// </remarks>
     internal static string NetworkFilter(ushort listenerPort, UdpLanePool? lanes = null)
@@ -263,7 +266,9 @@ public sealed class DivertPipeline : IAsyncDisposable
             $"(outbound and tcp and not loopback) or " +
             $"(outbound and tcp and loopback and tcp.SrcPort = {listenerPort}) or " +
             $"(outbound and udp and not loopback) or " +
-            "(udp and udp.SrcPort = 53) or (tcp and tcp.SrcPort = 53)";
+            "(udp and udp.SrcPort = 53) or (tcp and tcp.SrcPort = 53) or " +
+            "(outbound and loopback and udp and udp.DstPort = 53) or " +
+            "(outbound and loopback and tcp and tcp.DstPort = 53)";
 
         // Loopback UDP, for the lanes' replies on their way back to the application - and only from
         // the block reserved for them.
@@ -913,9 +918,20 @@ public sealed class DivertPipeline : IAsyncDisposable
             return PacketAction.Forward;
         }
 
+        if (view.DestinationPort == 53 && address.Outbound)
+        {
+            ObserveDns(view, isQuery: true);
+
+            // Loopback queries are captured only to be remembered; they were never routed here.
+            if (address.Loopback)
+            {
+                return PacketAction.Forward;
+            }
+        }
+
         if (view.SourcePort == 53)
         {
-            ObserveDns(view);
+            ObserveDns(view, isQuery: false);
             if (!address.Outbound || address.Loopback)
             {
                 return PacketAction.Forward;
@@ -1255,7 +1271,11 @@ public sealed class DivertPipeline : IAsyncDisposable
 
     // ---- DNS observer -----------------------------------------------------------------------
 
-    private void ObserveDns(in PacketView view)
+    /// <summary>
+    /// Hands a DNS message to the observer with the endpoints it travelled between, which is what an
+    /// answer is matched against (SL-SEC-003). A packet's claim to be DNS is not evidence on its own.
+    /// </summary>
+    private void ObserveDns(in PacketView view, bool isQuery)
     {
         var bytes = view.Bytes;
         var headerLength = view.Protocol == PacketView.ProtocolUdp ? 8 : (bytes[view.TransportOffset + 12] >> 4) * 4;
@@ -1264,23 +1284,39 @@ public sealed class DivertPipeline : IAsyncDisposable
         {
             return;
         }
+
+        var source = new IPEndPoint(new IPAddress(view.SourceAddress), view.SourcePort);
+        var destination = new IPEndPoint(new IPAddress(view.DestinationAddress), view.DestinationPort);
         var payload = bytes[(view.TransportOffset + headerLength)..];
+
         if (view.Protocol == PacketView.ProtocolUdp)
         {
-            _dns.IngestResponse(payload);
+            Observe(DnsTransport.Udp, payload);
+            return;
         }
-        else
+
+        // TCP DNS has a two-byte length prefix. Partial frames are not interpreted as evidence.
+        while (payload.Length >= 2)
         {
-            // TCP DNS has a two-byte length prefix. Partial frames are not interpreted as evidence.
-            while (payload.Length >= 2)
+            var length = System.Buffers.Binary.BinaryPrimitives.ReadUInt16BigEndian(payload);
+            if (length == 0 || length > payload.Length - 2)
             {
-                var length = System.Buffers.Binary.BinaryPrimitives.ReadUInt16BigEndian(payload);
-                if (length == 0 || length > payload.Length - 2)
-                {
-                    return;
-                }
-                _dns.IngestResponse(payload.Slice(2, length));
-                payload = payload[(2 + length)..];
+                return;
+            }
+
+            Observe(DnsTransport.Tcp, payload.Slice(2, length));
+            payload = payload[(2 + length)..];
+        }
+
+        void Observe(DnsTransport transport, ReadOnlySpan<byte> message)
+        {
+            if (isQuery)
+            {
+                _dns.ObserveQuery(transport, source, destination, message);
+            }
+            else
+            {
+                _dns.IngestResponse(transport, source, destination, message);
             }
         }
     }

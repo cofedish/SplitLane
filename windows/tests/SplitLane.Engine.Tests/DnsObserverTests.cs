@@ -1,6 +1,7 @@
 using System.Net;
 using Microsoft.Extensions.Time.Testing;
 using SplitLane.Engine.Flows;
+using SplitLane.Engine.Tests.Security;
 
 namespace SplitLane.Engine.Tests;
 
@@ -14,6 +15,23 @@ namespace SplitLane.Engine.Tests;
 /// </remarks>
 public sealed class DnsObserverTests
 {
+    private static readonly IPEndPoint Client = new(IPAddress.Parse("192.168.0.84"), 50000);
+    private static readonly IPEndPoint Resolver = new(IPAddress.Parse("8.8.8.8"), 53);
+
+    /// <summary>
+    /// Delivers a response the way the engine sees one: after the query it answers. Responses are
+    /// evidence only as answers to observed queries (SL-SEC-003); these tests are about parsing.
+    /// </summary>
+    private static int Answer(DnsObserver observer, ReadOnlySpan<byte> response)
+    {
+        if (TestDns.QueryFor(response) is { } query)
+        {
+            observer.ObserveQuery(DnsTransport.Udp, Client, Resolver, query);
+        }
+
+        return observer.IngestResponse(DnsTransport.Udp, Resolver, Client, response);
+    }
+
     /// <summary>Builds a DNS response for one name with the given answers.</summary>
     private static byte[] BuildResponse(
         string name,
@@ -76,7 +94,7 @@ public sealed class DnsObserverTests
         var observer = new DnsObserver();
         var response = BuildResponse("example.com", [(1, [93, 184, 216, 34])]);
 
-        Assert.Equal(1, observer.IngestResponse(response));
+        Assert.Equal(1, Answer(observer, response));
         Assert.Equal("example.com", observer.Lookup(IPAddress.Parse("93.184.216.34")));
     }
 
@@ -87,7 +105,7 @@ public sealed class DnsObserverTests
         var address = IPAddress.Parse("2606:2800:220:1::1");
         var response = BuildResponse("example.com", [(28, address.GetAddressBytes())]);
 
-        Assert.Equal(1, observer.IngestResponse(response));
+        Assert.Equal(1, Answer(observer, response));
         Assert.Equal("example.com", observer.Lookup(address));
     }
 
@@ -102,7 +120,7 @@ public sealed class DnsObserverTests
             (1, [9, 10, 11, 12]),
         ]);
 
-        Assert.Equal(3, observer.IngestResponse(response));
+        Assert.Equal(3, Answer(observer, response));
         Assert.Equal("cdn.example.com", observer.Lookup(IPAddress.Parse("5.6.7.8")));
     }
 
@@ -112,7 +130,7 @@ public sealed class DnsObserverTests
         var observer = new DnsObserver();
         var response = BuildResponse("example.com", [(1, [93, 184, 216, 34])], useCompression: false);
 
-        Assert.Equal(1, observer.IngestResponse(response));
+        Assert.Equal(1, Answer(observer, response));
     }
 
     [Fact]
@@ -125,7 +143,7 @@ public sealed class DnsObserverTests
             (1, [93, 184, 216, 34]),
         ]);
 
-        Assert.Equal(1, observer.IngestResponse(response));
+        Assert.Equal(1, Answer(observer, response));
         Assert.Equal("example.com", observer.Lookup(IPAddress.Parse("93.184.216.34")));
     }
 
@@ -136,7 +154,7 @@ public sealed class DnsObserverTests
         var query = BuildResponse("example.com", [(1, [1, 2, 3, 4])]);
         query[2] = 0x01; // clear the response bit
 
-        Assert.Equal(0, observer.IngestResponse(query));
+        Assert.Equal(0, Answer(observer, query));
     }
 
     [Fact]
@@ -146,7 +164,7 @@ public sealed class DnsObserverTests
         var response = BuildResponse("example.com", [(1, [1, 2, 3, 4])]);
         response[3] = 0x83; // NXDOMAIN
 
-        Assert.Equal(0, observer.IngestResponse(response));
+        Assert.Equal(0, Answer(observer, response));
     }
 
     // ---- Malformed input ----------------------------------------------------------------------
@@ -156,7 +174,7 @@ public sealed class DnsObserverTests
     [InlineData(4)]
     [InlineData(11)]
     public void ATruncatedHeaderIsIgnored(int length) =>
-        Assert.Equal(0, new DnsObserver().IngestResponse(new byte[length]));
+        Assert.Equal(0, Answer(new DnsObserver(), new byte[length]));
 
     [Fact]
     public void ATruncatedAnswerSectionStopsCleanly()
@@ -167,7 +185,7 @@ public sealed class DnsObserverTests
         for (var cut = 12; cut < response.Length; cut++)
         {
             // Whatever it learns, it must not throw and must not hang.
-            observer.IngestResponse(response.AsSpan(0, cut));
+            Answer(observer, response.AsSpan(0, cut));
         }
     }
 
@@ -181,7 +199,7 @@ public sealed class DnsObserverTests
             0xC0, 0x0C,
         };
 
-        Assert.Equal(0, new DnsObserver().IngestResponse(response));
+        Assert.Equal(0, Answer(new DnsObserver(), response));
     }
 
     [Fact]
@@ -194,7 +212,7 @@ public sealed class DnsObserverTests
             0x00, 0x01, 0x00, 0x01,
         };
 
-        Assert.Equal(0, new DnsObserver().IngestResponse(response));
+        Assert.Equal(0, Answer(new DnsObserver(), response));
     }
 
     [Fact]
@@ -207,7 +225,7 @@ public sealed class DnsObserverTests
         response[^6] = 0xFF;
         response[^5] = 0xFF;
 
-        Assert.Equal(0, observer.IngestResponse(response));
+        Assert.Equal(0, Answer(observer, response));
     }
 
     // ---- Expiry and bounds ----------------------------------------------------------------------
@@ -262,7 +280,7 @@ public sealed class DnsObserverTests
     {
         var time = new FakeTimeProvider();
         var observer = new DnsObserver(time);
-        observer.IngestResponse(BuildResponse("api.example.com", [(1, [1, 2, 3, 4])]));
+        Answer(observer, BuildResponse("api.example.com", [(1, [1, 2, 3, 4])]));
         time.Advance(TimeSpan.FromSeconds(300));
         Assert.Null(observer.Lookup(IPAddress.Parse("1.2.3.4")));
     }
@@ -271,8 +289,8 @@ public sealed class DnsObserverTests
     public void ChangingAnAnswerReplacesTheOldAddresses()
     {
         var observer = new DnsObserver();
-        observer.IngestResponse(BuildResponse("api.example.com", [(1, [1, 2, 3, 4])]));
-        observer.IngestResponse(BuildResponse("api.example.com", [(1, [5, 6, 7, 8])]));
+        Answer(observer, BuildResponse("api.example.com", [(1, [1, 2, 3, 4])]));
+        Answer(observer, BuildResponse("api.example.com", [(1, [5, 6, 7, 8])]));
         Assert.Null(observer.Lookup(IPAddress.Parse("1.2.3.4")));
         Assert.Equal("api.example.com", observer.Lookup(IPAddress.Parse("5.6.7.8")));
     }
@@ -281,7 +299,7 @@ public sealed class DnsObserverTests
     public void DuplicateAnswersDoNotMakeAnAddressAmbiguous()
     {
         var observer = new DnsObserver();
-        observer.IngestResponse(BuildResponse("api.example.com", [(1, [1, 2, 3, 4]), (1, [1, 2, 3, 4])]));
+        Answer(observer, BuildResponse("api.example.com", [(1, [1, 2, 3, 4]), (1, [1, 2, 3, 4])]));
         Assert.Equal("api.example.com", observer.Lookup(IPAddress.Parse("1.2.3.4")));
         Assert.Equal(1, observer.Count);
     }
@@ -295,7 +313,7 @@ public sealed class DnsObserverTests
         {
             var bytes = new byte[random.Next(512)];
             random.NextBytes(bytes);
-            observer.IngestResponse(bytes);
+            Answer(observer, bytes);
         }
         Assert.True(observer.Count <= observer.MaxEntries);
     }
