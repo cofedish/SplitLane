@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using Microsoft.Win32.SafeHandles;
 using static SplitLane.Platform.ImageInspectionNative;
@@ -147,10 +148,42 @@ internal static class ImageFile
             return (null, null, null);
         }
 
-        var table = StringTable(block);
-        return table is null
-            ? (null, null, null)
-            : (Query(block, table, "ProductName"), Query(block, table, "OriginalFilename"), Query(block, table, "FileDescription"));
+        // VerQueryValue answers with pointers into the block. The block stays pinned until every answer
+        // has been read, and each is read from the array by offset, bounds-checked, rather than through
+        // the pointer: a pointer into a managed array is only valid while the array cannot move
+        // (SL-SEC-013).
+        var pin = GCHandle.Alloc(block, GCHandleType.Pinned);
+        try
+        {
+            var start = pin.AddrOfPinnedObject();
+            var table = StringTable(block, start);
+            return table is null
+                ? (null, null, null)
+                : (Query(block, start, table, "ProductName"),
+                   Query(block, start, table, "OriginalFilename"),
+                   Query(block, start, table, "FileDescription"));
+        }
+        finally
+        {
+            pin.Free();
+        }
+    }
+
+    /// <summary>
+    /// Where an answer from <c>VerQueryValue</c> lies in the block, if all of it lies inside the block.
+    /// </summary>
+    internal static bool TryLocate(int blockLength, nint start, nint pointer, long bytes, out int offset)
+    {
+        offset = 0;
+        var delta = (long)pointer - (long)start;
+
+        if (pointer == nint.Zero || delta < 0 || bytes < 0 || delta + bytes > blockLength)
+        {
+            return false;
+        }
+
+        offset = (int)delta;
+        return true;
     }
 
     /// <summary>
@@ -230,21 +263,21 @@ internal static class ImageFile
     private static readonly long[] DriveTypes = new long[26];
 
     /// <summary>The first language and code page the resource declares, as a StringFileInfo key.</summary>
-    private static string? StringTable(byte[] block)
+    private static string? StringTable(byte[] block, nint start)
     {
-        if (VerQueryValue(block, @"\VarFileInfo\Translation", out var pointer, out var length) &&
-            pointer != nint.Zero && length >= 4)
+        if (VerQueryValue(start, @"\VarFileInfo\Translation", out var pointer, out var length) &&
+            length >= 4 && TryLocate(block.Length, start, pointer, 4, out var offset))
         {
-            var language = (ushort)System.Runtime.InteropServices.Marshal.ReadInt16(pointer);
-            var codePage = (ushort)System.Runtime.InteropServices.Marshal.ReadInt16(pointer, 2);
+            var language = BitConverter.ToUInt16(block, offset);
+            var codePage = BitConverter.ToUInt16(block, offset + 2);
             return $"{language:X4}{codePage:X4}";
         }
 
         // No translation table: the two tables resource compilers write when none is declared.
         foreach (var fallback in new[] { "040904B0", "040904E4", "04090000" })
         {
-            if (VerQueryValue(block, $@"\StringFileInfo\{fallback}\ProductName", out _, out _) ||
-                VerQueryValue(block, $@"\StringFileInfo\{fallback}\OriginalFilename", out _, out _))
+            if (VerQueryValue(start, $@"\StringFileInfo\{fallback}\ProductName", out _, out _) ||
+                VerQueryValue(start, $@"\StringFileInfo\{fallback}\OriginalFilename", out _, out _))
             {
                 return fallback;
             }
@@ -253,15 +286,16 @@ internal static class ImageFile
         return null;
     }
 
-    private static string? Query(byte[] block, string table, string name)
+    private static string? Query(byte[] block, nint start, string table, string name)
     {
-        if (!VerQueryValue(block, $@"\StringFileInfo\{table}\{name}", out var pointer, out var length) ||
-            pointer == nint.Zero || length == 0)
+        // The length is in UTF-16 characters, terminator included.
+        if (!VerQueryValue(start, $@"\StringFileInfo\{table}\{name}", out var pointer, out var length) ||
+            length == 0 || !TryLocate(block.Length, start, pointer, length * 2L, out var offset))
         {
             return null;
         }
 
-        return Trimmed(System.Runtime.InteropServices.Marshal.PtrToStringUni(pointer, (int)length).TrimEnd('\0'));
+        return Trimmed(System.Text.Encoding.Unicode.GetString(block, offset, (int)length * 2).TrimEnd('\0'));
     }
 
     /// <summary>

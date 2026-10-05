@@ -287,7 +287,7 @@ internal static class ImageInspectionNative
     [DllImport("version.dll", EntryPoint = "VerQueryValueW", CharSet = CharSet.Unicode, ExactSpelling = true)]
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    internal static extern bool VerQueryValue(byte[] block, string subBlock, out nint buffer, out uint length);
+    internal static extern bool VerQueryValue(nint block, string subBlock, out nint buffer, out uint length);
 
     // ---- Package origin ----------------------------------------------------------------------
 
