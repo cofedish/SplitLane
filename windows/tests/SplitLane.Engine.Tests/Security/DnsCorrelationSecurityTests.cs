@@ -152,6 +152,25 @@ public sealed class DnsCorrelationSecurityTests
     }
 
     [Fact]
+    public void A_flood_of_unanswered_queries_does_not_stop_a_genuine_answer_being_learned()
+    {
+        // Any local process can send queries to any address. A full table used to refuse every new
+        // query, so no answer was learned and domain rules matched nothing.
+        var observer = new DnsObserver { MaxPendingQueries = 16 };
+        var flooder = new IPEndPoint(Client.Address, 61000);
+
+        for (ushort i = 0; i < 200; i++)
+        {
+            observer.ObserveQuery(DnsTransport.Udp, flooder, new IPEndPoint(IPAddress.Parse("198.51.100.99"), 53), TestDns.Query($"f{i}.example", i));
+        }
+
+        Assert.True(observer.ObserveQuery(DnsTransport.Udp, Client, Resolver, TestDns.Query("example.com")));
+        Assert.Equal(1, observer.IngestResponse(DnsTransport.Udp, Resolver, Client, TestDns.Response("example.com", Answer)));
+        Assert.Equal("example.com", observer.Lookup(Answer));
+        Assert.True(observer.PendingQueryCount <= 16);
+    }
+
+    [Fact]
     public void A_loopback_resolver_the_machine_does_not_use_is_not_believed()
     {
         var local = new IPEndPoint(IPAddress.Loopback, 53);

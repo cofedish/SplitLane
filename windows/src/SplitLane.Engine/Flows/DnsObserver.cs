@@ -61,6 +61,7 @@ public sealed class DnsObserver(TimeProvider? timeProvider = null)
     private readonly Dictionary<string, HashSet<IPAddress>> _addressesByName = new(StringComparer.Ordinal);
     private readonly Queue<IPAddress> _insertionOrder = new();
     private readonly ConcurrentDictionary<QueryKey, DateTimeOffset> _pending = new();
+    private readonly Queue<QueryKey> _pendingOrder = new();
     private readonly Lock _writeGate = new();
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
 
@@ -100,8 +101,10 @@ public sealed class DnsObserver(TimeProvider? timeProvider = null)
     /// <remarks>
     /// Far beyond what a machine has in flight at once (the DNS client caches, and retries with
     /// backoff), and small enough that a flood of queries costs a bounded amount of memory. When full,
-    /// expired queries are dropped first; a new query that still does not fit is not tracked, so its
-    /// answer teaches nothing - the conservative direction.
+    /// expired queries are dropped first and then the oldest. A new query used to be refused instead,
+    /// and then any local process sending a few thousand queries to any address kept every genuine
+    /// answer from being learned, which turned domain rules off. Now a flood has to outpace the
+    /// milliseconds a real answer takes - thousands of queries in that time - to push one out.
     /// </remarks>
     public int MaxPendingQueries { get; init; } = 4096;
 
@@ -170,6 +173,7 @@ public sealed class DnsObserver(TimeProvider? timeProvider = null)
             _addressesByName.Clear();
             _insertionOrder.Clear();
             _pending.Clear();
+            _pendingOrder.Clear();
         }
     }
 
@@ -222,20 +226,30 @@ public sealed class DnsObserver(TimeProvider? timeProvider = null)
             transport, client.Address, (ushort)client.Port, server.Address, (ushort)server.Port, id, name, type, recordClass);
 
         var now = _time.GetUtcNow();
-        if (_pending.Count >= MaxPendingQueries)
+
+        lock (_writeGate)
         {
-            lock (_writeGate)
+            // The order queue is never shorter than the table, so it is a cheap first test.
+            if (_pendingOrder.Count >= MaxPendingQueries && _pending.Count >= MaxPendingQueries)
             {
                 SweepQueries(now);
+
+                while (_pending.Count >= MaxPendingQueries && _pendingOrder.TryDequeue(out var oldest))
+                {
+                    _pending.TryRemove(oldest, out _);
+                }
             }
 
-            if (_pending.Count >= MaxPendingQueries)
+            _pending[key] = now + QueryLifetime;
+            _pendingOrder.Enqueue(key);
+
+            if (_pendingOrder.Count > 2 * MaxPendingQueries)
             {
-                return false;
+                // Answered queries leave their keys behind in the order; keep it bounded.
+                CompactPendingOrder();
             }
         }
 
-        _pending[key] = now + QueryLifetime;
         return true;
     }
 
@@ -532,6 +546,24 @@ public sealed class DnsObserver(TimeProvider? timeProvider = null)
             if (deadline <= now)
             {
                 _pending.TryRemove(key, out _);
+            }
+        }
+
+        CompactPendingOrder();
+    }
+
+    /// <summary>Drops keys of queries no longer pending from the order, keeping one per pending query.</summary>
+    private void CompactPendingOrder()
+    {
+        var kept = new HashSet<QueryKey>();
+        var count = _pendingOrder.Count;
+
+        for (var i = 0; i < count; i++)
+        {
+            var key = _pendingOrder.Dequeue();
+            if (_pending.ContainsKey(key) && kept.Add(key))
+            {
+                _pendingOrder.Enqueue(key);
             }
         }
     }
