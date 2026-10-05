@@ -220,7 +220,7 @@ public sealed class ProcessResolver
                 return (path, startTime, cached.PackageFamilyName, cached);
             }
 
-            return (path, startTime, SplitLane.Platform.ProcessPackage.FamilyName(handle), null);
+            return (path, startTime, SplitLane.Platform.ProcessPackage.Claim(handle), null);
         }
         finally
         {

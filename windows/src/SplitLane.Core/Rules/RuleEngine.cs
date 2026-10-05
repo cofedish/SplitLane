@@ -306,6 +306,17 @@ public sealed class RuleSnapshot
             return RuleMatch.None;
         }
 
+        // A claim to a selected package whose origin could not be verified is neither that package nor
+        // an ordinary process: the rule refuses it (SL-SEC-016). Treating it as the package would hand
+        // its lane to an impostor; treating it as unpackaged would send a genuine one DIRECT.
+        if (_packageIdentities.Count > 0 &&
+            !string.IsNullOrEmpty(evidence.UnverifiedPackageFamilyName) &&
+            _packageIdentities.TryGetValue(evidence.UnverifiedPackageFamilyName, out var claimed) &&
+            claimed.Count > 0)
+        {
+            return new RuleMatch(null, MatchKind.None, Mismatched: claimed[0]);
+        }
+
         if (_packageIdentities.Count > 0 &&
             !string.IsNullOrEmpty(evidence.PackageFamilyName) &&
             _packageIdentities.TryGetValue(evidence.PackageFamilyName, out var packaged))

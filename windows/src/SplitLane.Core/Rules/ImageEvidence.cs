@@ -81,6 +81,23 @@ public sealed record ImageEvidence
     public string? PackageFamilyName { get; init; }
 
     /// <summary>
+    /// A package family the process's token claims whose origin could not be verified (SL-SEC-016).
+    /// Never matched as the package; a rule for it refuses the process instead.
+    /// </summary>
+    public string? UnverifiedPackageFamilyName { get; init; }
+
+    /// <summary>
+    /// The evidence with a package claim applied: a verified family, or one marked as unverified with
+    /// a leading <c>?</c>, or nothing.
+    /// </summary>
+    public ImageEvidence WithPackageClaim(string? claim) => claim switch
+    {
+        null => this,
+        ['?', .. var family] => this with { PackageFamilyName = null, UnverifiedPackageFamilyName = family },
+        _ => this with { PackageFamilyName = claim, UnverifiedPackageFamilyName = null },
+    };
+
+    /// <summary>
     /// <c>ProductName</c> from the version resource, or null when there is none or it was not read.
     /// </summary>
     /// <remarks>

@@ -192,7 +192,7 @@ public sealed class ImageCatalog : IAsyncDisposable
             record.Evidence = evidence;
         }
 
-        return packageFamilyName is null ? evidence : evidence with { PackageFamilyName = packageFamilyName };
+        return evidence.WithPackageClaim(packageFamilyName);
     }
 
     /// <summary>

@@ -294,6 +294,18 @@ internal static class ImageInspectionNative
     /// <summary>PackageOrigin_Unsigned: registered from loose files with no signature.</summary>
     internal const int PackageOriginUnsigned = 1;
 
+    /// <summary>PackageOrigin_Inbox.</summary>
+    internal const int PackageOriginInbox = 2;
+
+    /// <summary>PackageOrigin_Store.</summary>
+    internal const int PackageOriginStore = 3;
+
+    /// <summary>PackageOrigin_DeveloperSigned.</summary>
+    internal const int PackageOriginDeveloperSigned = 5;
+
+    /// <summary>PackageOrigin_LineOfBusiness.</summary>
+    internal const int PackageOriginLineOfBusiness = 6;
+
     /// <summary>PackageOrigin_DeveloperUnsigned: registered in Developer Mode from an unsigned layout.</summary>
     internal const int PackageOriginDeveloperUnsigned = 4;
 

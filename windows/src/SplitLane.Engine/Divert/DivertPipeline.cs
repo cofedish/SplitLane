@@ -751,8 +751,7 @@ public sealed class DivertPipeline : IAsyncDisposable
             : info.PackageFamilyName is null ? null : new ImageEvidence
             {
                 ExecutablePath = info.ExecutablePath,
-                PackageFamilyName = info.PackageFamilyName,
-            };
+            }.WithPackageClaim(info.PackageFamilyName);
 
     private void HandleConnect(in WinDivertAddress address)
     {
