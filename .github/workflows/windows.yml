@@ -22,6 +22,11 @@ on:
         required: false
         default: '0.1.0'
 
+# Nothing in this workflow writes to the repository except the release job, which asks for it itself.
+# Every other job is read-only.
+permissions:
+  contents: read
+
 env:
   DOTNET_NOLOGO: 'true'
   DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
@@ -37,15 +42,15 @@ jobs:
     timeout-minutes: 20
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up .NET
-        uses: actions/setup-dotnet@v6
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: '10.0.x'
 
       - name: Cache NuGet
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.nuget/packages
           key: nuget-${{ runner.os }}-${{ hashFiles('windows/**/*.csproj', 'windows/**/*.wixproj') }}
@@ -76,7 +81,7 @@ jobs:
           --results-directory ../artifacts/test-results
 
       - name: Publish test results
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: test-results
@@ -95,15 +100,15 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up .NET
-        uses: actions/setup-dotnet@v6
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: '10.0.x'
 
       - name: Cache NuGet
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.nuget/packages
           key: nuget-${{ runner.os }}-${{ hashFiles('windows/**/*.csproj', 'windows/**/*.wixproj') }}
@@ -111,15 +116,19 @@ jobs:
 
       # A tag is the version. Anything else is that version plus the run number, so untagged builds
       # are ordered and distinguishable without ever colliding with a real release.
+      # Inputs reach the script through the environment, never spliced into its text: an expression
+      # pasted into a script becomes part of the script.
       - name: Resolve version
         id: version
         shell: pwsh
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
         run: |
           if ($env:GITHUB_REF -like 'refs/tags/v*') {
               $version = $env:GITHUB_REF -replace '^refs/tags/v', ''
           }
-          elseif ('${{ github.event.inputs.version }}') {
-              $version = '${{ github.event.inputs.version }}'
+          elseif ($env:INPUT_VERSION) {
+              $version = $env:INPUT_VERSION
           }
           else {
               $version = "0.1.0.$env:GITHUB_RUN_NUMBER"
@@ -137,17 +146,21 @@ jobs:
       - name: Build installer and portable archive
         working-directory: windows
         shell: pwsh
-        run: ./tools/build-installer.ps1 -Version '${{ steps.version.outputs.version }}'
+        env:
+          BUILD_VERSION: ${{ steps.version.outputs.version }}
+        run: ./tools/build-installer.ps1 -Version $env:BUILD_VERSION
 
       # The MSI is unsigned. SmartScreen will warn on first run, and saying so here is better than
       # letting each person discover it and wonder whether the download was tampered with.
       - name: Record artifact hashes
         working-directory: windows/artifacts/release
         shell: pwsh
+        env:
+          BUILD_VERSION: ${{ steps.version.outputs.version }}
         run: |
           $lines = @(
               'SplitLane for Windows'
-              'Version ${{ steps.version.outputs.version }}'
+              "Version $env:BUILD_VERSION"
               "Commit  $env:GITHUB_SHA"
               ''
               'SHA-256'
@@ -163,7 +176,7 @@ jobs:
           Get-Content 'SHA256SUMS.txt'
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: splitlane-windows-${{ steps.version.outputs.version }}
           path: |
@@ -173,23 +186,31 @@ jobs:
           retention-days: 30
 
   # ---------------------------------------------------------------------------------------------
-  # Release. Tag-only. Attaches the packaged output to a GitHub release.
+  # Sign. Tag-only. The only job that ever sees the update-signing key (SL-SEC-002).
+  #
+  # Trust boundary: every installed engine accepts a manifest signed with this key, and the engine
+  # runs as LocalSystem. Whoever holds the key can therefore run code as SYSTEM on every machine with
+  # SplitLane. The rules for this job follow from that:
+  #
+  #   - no third-party action runs here; the two actions used are GitHub's own, pinned to a commit,
+  #     and both run in steps whose environment never contains the key;
+  #   - the secret is bound to the one step that signs, never to the job;
+  #   - the key is imported into memory only, never written to disk, and disposed in that step;
+  #   - the job has read-only permissions and produces two small files; publishing is the next job,
+  #     which has write permission and no key.
   # ---------------------------------------------------------------------------------------------
-  release:
-    name: Release
+  sign:
+    name: Sign update manifest
     runs-on: ubuntu-latest
     needs: package
     if: startsWith(github.ref, 'refs/tags/v')
+    timeout-minutes: 10
     permissions:
-      contents: write
-    env:
-      UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+      contents: read
 
     steps:
-      - uses: actions/checkout@v7
-
       - name: Download packaged output
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: splitlane-windows-*
           merge-multiple: true
@@ -197,27 +218,30 @@ jobs:
 
       # The update manifest, and the signature installed engines check it against.
       #
-      # The engine runs as LocalSystem, so a manifest it accepts is code running with full privileges
-      # on somebody's machine. It accepts one only if this signature verifies against a public key
-      # compiled into the build, which is why the private half lives here as a secret and nowhere
-      # else - not in the repository, not in an artifact, not in a log.
-      #
       # A release published without the secret gets no manifest rather than an unsigned one. An
       # unsigned manifest is not a lesser update; it is one that nothing will install, and producing
       # it quietly would look like a working release until somebody tried to upgrade.
       - name: Sign the update manifest
-        if: ${{ env.UPDATE_SIGNING_KEY != '' }}
+        shell: pwsh
         env:
           UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
-        shell: pwsh
+          REF_NAME: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
         run: |
-          $version = '${{ github.ref_name }}' -replace '^v', ''
+          if (-not $env:UPDATE_SIGNING_KEY) {
+              Write-Host 'No signing key configured: this release gets no update manifest.'
+              exit 0
+          }
+
+          $version = $env:REF_NAME -replace '^v', ''
+          if ($version -notmatch '^\d+(\.\d+){0,3}$') { throw "Tag '$env:REF_NAME' is not a release version." }
+
           $msi = Get-ChildItem release -Filter '*.msi' | Select-Object -First 1
           if (-not $msi) { throw 'No MSI in the release directory.' }
 
           $manifest = [ordered]@{
               version    = $version
-              url        = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/$($msi.Name)"
+              url        = "https://github.com/$env:REPOSITORY/releases/download/$env:REF_NAME/$($msi.Name)"
               sha256     = (Get-FileHash $msi.FullName -Algorithm SHA256).Hash
               releasedAt = (Get-Date).ToUniversalTime().ToString('o')
               notes      = 'See the release notes for what changed.'
@@ -226,23 +250,65 @@ jobs:
           # Written as UTF-8 with no byte-order mark, and signed over exactly those bytes. The
           # engine verifies the document as published, before parsing it, so a BOM added here would
           # be a byte it never saw and every installation would refuse the release.
-          [IO.File]::WriteAllText("$PWD/release/update.json", $manifest, [Text.UTF8Encoding]::new($false))
+          New-Item -ItemType Directory -Force signed | Out-Null
+          [IO.File]::WriteAllText("$PWD/signed/update.json", $manifest, [Text.UTF8Encoding]::new($false))
 
           $key = [Convert]::FromBase64String($env:UPDATE_SIGNING_KEY)
           $ecdsa = [System.Security.Cryptography.ECDsa]::Create()
-          $ecdsa.ImportPkcs8PrivateKey($key, [ref]0)
-          $signature = $ecdsa.SignData(
-              [Text.Encoding]::UTF8.GetBytes($manifest),
-              [System.Security.Cryptography.HashAlgorithmName]::SHA256)
-          $ecdsa.Dispose()
+          try {
+              $ecdsa.ImportPkcs8PrivateKey($key, [ref]0)
+              $signature = $ecdsa.SignData(
+                  [Text.Encoding]::UTF8.GetBytes($manifest),
+                  [System.Security.Cryptography.HashAlgorithmName]::SHA256)
+          }
+          finally {
+              $ecdsa.Dispose()
+              [Array]::Clear($key, 0, $key.Length)
+              Remove-Item Env:UPDATE_SIGNING_KEY -ErrorAction SilentlyContinue
+          }
 
-          [IO.File]::WriteAllText("$PWD/release/update.json.sig", [Convert]::ToBase64String($signature))
+          [IO.File]::WriteAllText("$PWD/signed/update.json.sig", [Convert]::ToBase64String($signature))
           Write-Host "Signed update.json for $version"
 
-      - name: Publish release
-        uses: softprops/action-gh-release@v3
+      - name: Hand the signed manifest on
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          files: release/*
-          draft: false
-          generate_release_notes: false
-          body_path: windows/docs/releases/${{ github.ref_name }}.md
+          name: splitlane-update-manifest
+          path: signed/
+          if-no-files-found: ignore
+          retention-days: 30
+
+  # ---------------------------------------------------------------------------------------------
+  # Release. Tag-only. Attaches the packaged output and the signed manifest to a GitHub release.
+  #
+  # This job has contents: write and no signing key. It publishes with the GitHub CLI that ships on
+  # the runner, not a third-party release action, so no code from outside GitHub runs with a token
+  # that can rewrite releases.
+  # ---------------------------------------------------------------------------------------------
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    needs: sign
+    if: startsWith(github.ref, 'refs/tags/v')
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download packaged output and manifest
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: splitlane-*
+          merge-multiple: true
+          path: release
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          notes="windows/docs/releases/${REF_NAME}.md"
+          if [ ! -f "$notes" ]; then echo "Release notes $notes are missing." >&2; exit 1; fi
+          gh release create "$REF_NAME" release/* --title "$REF_NAME" --notes-file "$notes" --verify-tag
