@@ -53,8 +53,24 @@ public readonly ref struct PacketView
     /// <summary>Transport protocol number.</summary>
     public byte Protocol { get; }
 
-    /// <summary>True when the transport is one SplitLane can rewrite ports on.</summary>
-    public bool HasPorts => Protocol is ProtocolTcp or ProtocolUdp;
+    /// <summary>
+    /// True when the transport is one SplitLane can rewrite ports on and its header is in this packet.
+    /// A later IPv4 fragment carries no transport header: what sits where the ports would be is the
+    /// middle of someone's payload (SL-SEC-022).
+    /// </summary>
+    public bool HasPorts => Protocol is ProtocolTcp or ProtocolUdp && !IsFragmentTail;
+
+    /// <summary>IPv4 fragment offset, in 8-byte units; 0 for a first fragment or a whole datagram.</summary>
+    public int FragmentOffset => IsIPv6 ? 0 : BinaryPrimitives.ReadUInt16BigEndian(_buffer.Slice(6, 2)) & 0x1FFF;
+
+    /// <summary>Whether more IPv4 fragments of this datagram follow.</summary>
+    public bool MoreFragments => IsIPv4 && (_buffer[6] & 0x20) != 0;
+
+    /// <summary>A fragment after the first: no transport header.</summary>
+    public bool IsFragmentTail => FragmentOffset != 0;
+
+    /// <summary>The IPv4 identification field, shared by every fragment of one datagram.</summary>
+    public ushort Identification => IsIPv6 ? (ushort)0 : BinaryPrimitives.ReadUInt16BigEndian(_buffer.Slice(4, 2));
 
     /// <summary>Length of the IP header.</summary>
     public int IpHeaderLength => IsIPv6 ? 40 : (_buffer[0] & 0x0F) * 4;
@@ -130,7 +146,15 @@ public readonly ref struct PacketView
                 }
 
                 var v4Protocol = packet[9];
-                if (!IsSupportedProtocol(v4Protocol) || packet.Length < ihl + MinimumTransportLength(v4Protocol))
+                if (!IsSupportedProtocol(v4Protocol))
+                {
+                    return false;
+                }
+
+                // A later fragment is valid without a transport header; it is reported as one, so it
+                // is never read as if it had ports.
+                var isTail = (BinaryPrimitives.ReadUInt16BigEndian(packet.Slice(6, 2)) & 0x1FFF) != 0;
+                if (!isTail && packet.Length < ihl + MinimumTransportLength(v4Protocol))
                 {
                     return false;
                 }

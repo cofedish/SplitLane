@@ -1130,13 +1130,73 @@ public sealed class DivertPipeline : IAsyncDisposable
         Drop,
     }
 
+    /// <summary>
+    /// Datagrams whose first fragment was refused or redirected, so their later fragments are refused
+    /// too (SL-SEC-022): a later fragment has no ports to decide it by, and forwarding it would send
+    /// part of a selected application's payload DIRECT.
+    /// </summary>
+    private readonly ConcurrentDictionary<(UInt128 Source, UInt128 Destination, ushort Id, byte Protocol), long> _heldFragments = new();
+
+    private static readonly long FragmentLifetimeTicks = Stopwatch.Frequency * 30;
+
+    private const int MaxHeldFragments = 4096;
+
     /// <summary>Decides what to do with one captured packet, rewriting it in place when needed.</summary>
     internal PacketAction Classify(Span<byte> packet, ref WinDivertAddress address)
     {
-        if (!PacketView.TryParse(packet, out var view) || !view.HasPorts)
+        if (!PacketView.TryParse(packet, out var view))
         {
             return PacketAction.Forward;
         }
+
+        if (view.IsFragmentTail)
+        {
+            return _heldFragments.TryGetValue(FragmentKey(view), out var since) &&
+                   Stopwatch.GetTimestamp() - since < FragmentLifetimeTicks
+                ? PacketAction.Drop
+                : PacketAction.Forward;
+        }
+
+        if (!view.HasPorts)
+        {
+            return PacketAction.Forward;
+        }
+
+        // Read before classification: a redirect rewrites the addresses this key is made of.
+        var firstFragment = view.MoreFragments ? FragmentKey(view) : default;
+        var action = ClassifyWithPorts(packet, view, ref address);
+
+        if (view.MoreFragments && action != PacketAction.Forward)
+        {
+            if (_heldFragments.Count >= MaxHeldFragments)
+            {
+                var now = Stopwatch.GetTimestamp();
+                foreach (var (key, since) in _heldFragments)
+                {
+                    if (now - since >= FragmentLifetimeTicks)
+                    {
+                        _heldFragments.TryRemove(key, out _);
+                    }
+                }
+            }
+
+            if (_heldFragments.Count < MaxHeldFragments)
+            {
+                _heldFragments[firstFragment] = Stopwatch.GetTimestamp();
+            }
+        }
+
+        return action;
+    }
+
+    private static (UInt128, UInt128, ushort, byte) FragmentKey(in PacketView view) => (
+        FlowKey.From(view.SourceAddress, 0).Address,
+        FlowKey.From(view.DestinationAddress, 0).Address,
+        view.Identification,
+        view.Protocol);
+
+    private PacketAction ClassifyWithPorts(Span<byte> packet, in PacketView view, ref WinDivertAddress address)
+    {
 
         if (view.DestinationPort == 53 && address.Outbound)
         {
@@ -1707,6 +1767,7 @@ public sealed class DivertPipeline : IAsyncDisposable
         _udpFlows.Clear();
         _udpSeen.Clear();
         _udpUnknownOwner.Clear();
+        _heldFragments.Clear();
         _udpOrigins.Clear();
         _pendingTcp.Clear();
         _pendingUdp.Clear();
