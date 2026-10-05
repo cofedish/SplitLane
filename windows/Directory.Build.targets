@@ -1,3 +1,29 @@
 <Project>
-  <!-- Placeholder for build customisation shared across projects. -->
+
+  <!--
+    The .NET runtime a self-contained publish carries (SL-SEC-012).
+
+    A self-contained publish bundles the runtime pack the SDK it was built with knows as the latest,
+    so the runtime's patch level used to depend on whichever SDK the building machine happened to
+    have. A package built with an SDK that bundled 10.0.10 shipped seven runtime CVEs fixed in
+    10.0.11 (Trivy; FINDINGS.md SL-SEC-012) while the CI build, on a newer SDK, did not.
+
+    Pinned here to a patch with no known vulnerabilities. Raise it with each .NET security release;
+    never lower it. tools/build-installer.ps1 refuses a publish whose runtime is older.
+  -->
+  <PropertyGroup>
+    <SplitLaneMinimumRuntimePatch>10.0.12</SplitLaneMinimumRuntimePatch>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <KnownFrameworkReference Update="Microsoft.NETCore.App"
+                             LatestRuntimeFrameworkVersion="$(SplitLaneMinimumRuntimePatch)" />
+    <KnownFrameworkReference Update="Microsoft.WindowsDesktop.App"
+                             LatestRuntimeFrameworkVersion="$(SplitLaneMinimumRuntimePatch)" />
+    <KnownFrameworkReference Update="Microsoft.WindowsDesktop.App.WPF"
+                             LatestRuntimeFrameworkVersion="$(SplitLaneMinimumRuntimePatch)" />
+    <KnownFrameworkReference Update="Microsoft.WindowsDesktop.App.WindowsForms"
+                             LatestRuntimeFrameworkVersion="$(SplitLaneMinimumRuntimePatch)" />
+  </ItemGroup>
+
 </Project>

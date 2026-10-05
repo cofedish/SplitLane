@@ -77,6 +77,26 @@ dotnet publish $engineProject -c $Configuration -r win-x64 --self-contained true
     "-p:Version=$Version" @publishFlags -o $engineOut
 if ($LASTEXITCODE -ne 0) { throw 'Publishing SplitLane.Engine failed.' }
 
+# The bundled .NET runtime must be at least the patch Directory.Build.targets pins (SL-SEC-012). A
+# self-contained publish carries whatever runtime pack it was given; a package built against an
+# older one would ship that runtime's known vulnerabilities, and nothing else would notice.
+$targets = Get-Content (Join-Path $root 'Directory.Build.targets') -Raw
+if ($targets -notmatch '<SplitLaneMinimumRuntimePatch>([0-9.]+)</SplitLaneMinimumRuntimePatch>') {
+    throw 'Directory.Build.targets does not name SplitLaneMinimumRuntimePatch.'
+}
+$minimumRuntime = [version]$Matches[1]
+
+foreach ($deps in @((Join-Path $appOut 'SplitLane.deps.json'), (Join-Path $engineOut 'SplitLane.Engine.deps.json'))) {
+    $packs = [regex]::Matches((Get-Content $deps -Raw), 'runtimepack\.Microsoft\.[A-Za-z.]+\.Runtime\.win-x64/([0-9.]+)')
+    if ($packs.Count -eq 0) { throw "$deps names no runtime pack; is the publish self-contained?" }
+
+    foreach ($pack in $packs) {
+        if ([version]$pack.Groups[1].Value -lt $minimumRuntime) {
+            throw "$deps carries runtime $($pack.Groups[1].Value), older than the pinned $minimumRuntime."
+        }
+    }
+}
+
 # The driver ships inside the package, and this is where that is made certain.
 #
 # It used to be fetched by hand after installing, which kept a third-party kernel driver out of a
