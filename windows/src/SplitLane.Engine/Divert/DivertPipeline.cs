@@ -749,7 +749,6 @@ public sealed class DivertPipeline : IAsyncDisposable
                 {
                     var record = images.Refresh(path);
                     pending = new PendingBind(udpFlow.Flow, record, udpFlow.Flow.Image?.PackageClaim, udpFlow.EndpointId, udpFlow.DualStack);
-                    images.RequestVerification(record, decision.Needs);
                 }
             }
 
@@ -774,6 +773,13 @@ public sealed class DivertPipeline : IAsyncDisposable
                 {
                     _udpPortOwners.TryRemove(slot, out _);
                 }
+            }
+
+            // A fast verification must see the hold it will release. Publish the socket-owned
+            // pending row before queuing work, as the initial bind path does.
+            if (pending is not null && Images is { } catalog)
+            {
+                catalog.RequestVerification(pending.Image, decision.Needs);
             }
 
             if (action != before)
@@ -808,6 +814,12 @@ public sealed class DivertPipeline : IAsyncDisposable
 
             _udpFlows[slot] = new UdpFlow(flow, endpointId, dualStack);
             _udpSeen[slot] = endpointId;
+
+            // A verified replacement owns this slot now; an older verification cannot keep its hold.
+            if (pending is null)
+            {
+                _pendingUdp.TryRemove(slot, out _);
+            }
 
             if (pending is not null)
             {
@@ -1041,6 +1053,12 @@ public sealed class DivertPipeline : IAsyncDisposable
             {
                 // Still this socket's hold? A close, or another socket since, leaves it alone.
                 if (!_pendingUdp.TryRemove(new KeyValuePair<PortSlot, PendingBind>(slot, pending)))
+                {
+                    continue;
+                }
+
+                if (!_udpFlows.TryGetValue(slot, out var current) || current.EndpointId != pending.EndpointId ||
+                    current.Flow != pending.Flow)
                 {
                     continue;
                 }

@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.NetworkInformation;
+using System.Net.Sockets;
 
 namespace SplitLane.Engine.Net;
 
@@ -54,7 +55,7 @@ public static class SystemResolvers
 
                 foreach (var server in adapter.GetIPProperties().DnsAddresses)
                 {
-                    addresses.Add(server.ScopeId == 0 ? server : new IPAddress(server.GetAddressBytes()));
+                    addresses.Add(WithoutScope(server));
                 }
             }
         }
@@ -65,4 +66,10 @@ public static class SystemResolvers
 
         return addresses;
     }
+
+    // Packet headers carry address bytes, not Windows' interface scope. IPv4 has no ScopeId.
+    internal static IPAddress WithoutScope(IPAddress server) =>
+        server.AddressFamily == AddressFamily.InterNetworkV6 && server.ScopeId != 0
+            ? new IPAddress(server.GetAddressBytes())
+            : server;
 }
