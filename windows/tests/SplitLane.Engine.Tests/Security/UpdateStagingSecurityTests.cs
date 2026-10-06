@@ -132,6 +132,13 @@ public sealed class UpdateStagingSecurityTests : IDisposable
     {
         var staged = await Staging().StageAsync("p.msi", Writes(Package), Sha(Package));
 
+        // Elevated runners default to Administrators as the file owner. Pin the fixture to the
+        // test account so this exercises an untrusted owner, rather than only its writable ACL.
+        var file = new FileInfo(staged.Path);
+        var security = file.GetAccessControl();
+        security.SetOwner(Me);
+        file.SetAccessControl(security);
+
         // Same directory, but a verifier that trusts only SYSTEM/Administrators: the test account that
         // created the file is then exactly "somebody else".
         var strict = new UpdateStaging(Root());
