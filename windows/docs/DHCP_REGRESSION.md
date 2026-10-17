@@ -36,3 +36,6 @@ Windows acceptance is pending until these results are recorded. No release tags,
 ## Shared version numbering
 
 Both editions declare the next coordinated Windows version as 0.14.0 in windows/release-version.txt. Directory.Build.props and the default installer builder read this file; release jobs reject tags that disagree. Public uses v0.14.0; Corporate uses corp-v0.14.0. The product number is identical; repositories, signing authorities, channels and manifests remain independent. Existing v0.13.1 and corporate testing tags 0.13.2–0.13.7 are not rewritten. Test-only builds may use explicit non-release versions. No 0.14.0 tag/release is created by this change; publication waits for Windows DHCP and the separate Corporate KES/updater acceptance.
+
+
+Native Windows verification: https://github.com/cofedish/SplitLane/actions/runs/39030045365 succeeded, including the complete native filter test and the Windows suite. Packaging/signing/release jobs were skipped (tests_only=true). The first native run caught unsupported grouped negation in the proposed filter; the final expression uses WinDivert conditional syntax to exclude DHCP before capture. This is real Windows user-mode helper verification, not a DHCP lease/reboot/WFP-driver acceptance result.
