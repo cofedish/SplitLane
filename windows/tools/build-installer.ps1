@@ -25,12 +25,13 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Version = '0.1.0',
+    [string]$Version = '',
     [string]$Configuration = 'Release',
     [string]$OutputDirectory = (Join-Path $PSScriptRoot '..\artifacts\release')
 )
 
 $ErrorActionPreference = 'Stop'
+if (-not $Version) { $Version = (Get-Content -LiteralPath (Join-Path $PSScriptRoot '../release-version.txt') -Raw).Trim() }
 
 $root = Resolve-Path (Join-Path $PSScriptRoot '..')
 $staging = Join-Path $root 'artifacts\publish'

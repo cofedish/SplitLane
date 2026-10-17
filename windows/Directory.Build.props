@@ -21,7 +21,7 @@
     -->
     <Product>SplitLane</Product>
     <Company>SplitLane</Company>
-    <Version>0.1.0</Version>
+    <Version>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)release-version.txt').Trim())</Version>
     <NeutralLanguage>en</NeutralLanguage>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
   </PropertyGroup>

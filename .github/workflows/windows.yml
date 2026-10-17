@@ -20,7 +20,11 @@ on:
       version:
         description: 'Version to stamp on the build'
         required: false
-        default: '0.1.0'
+        default: ''
+      tests_only:
+        description: 'Run build/tests without packaging or release publication'
+        type: boolean
+        default: false
 
 # Nothing in this workflow writes to the repository except the release job, which asks for it itself.
 # Every other job is read-only.
@@ -60,6 +64,11 @@ jobs:
         working-directory: windows
         run: dotnet restore SplitLane.Windows.slnx
 
+      # Only user-mode helper APIs are tested; this fetch does not install/open a driver.
+      - name: Fetch pinned WinDivert for native filter tests
+        shell: pwsh
+        run: ./windows/tools/fetch-windivert.ps1
+
       # Warnings are errors project-wide, so this step is also the style and API-hygiene gate.
       - name: Build
         working-directory: windows
@@ -94,6 +103,7 @@ jobs:
   # descriptions of them that drift apart.
   # ---------------------------------------------------------------------------------------------
   package:
+    if: ${{ !inputs.tests_only }}
     name: Package
     runs-on: windows-latest
     needs: test
@@ -124,14 +134,16 @@ jobs:
         env:
           INPUT_VERSION: ${{ github.event.inputs.version }}
         run: |
+          $baseVersion = (Get-Content -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'windows/release-version.txt') -Raw).Trim()
           if ($env:GITHUB_REF -like 'refs/tags/v*') {
               $version = $env:GITHUB_REF -replace '^refs/tags/v', ''
+              if ($version -ne $baseVersion) { throw 'Release tag differs from windows/release-version.txt.' }
           }
           elseif ($env:INPUT_VERSION) {
               $version = $env:INPUT_VERSION
           }
           else {
-              $version = "0.1.0.$env:GITHUB_RUN_NUMBER"
+              $version = "$baseVersion.$env:GITHUB_RUN_NUMBER"
           }
 
           # MSI product versions are four numeric fields at most, and msiexec rejects anything else

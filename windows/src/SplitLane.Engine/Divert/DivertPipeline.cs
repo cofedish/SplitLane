@@ -341,7 +341,10 @@ public sealed class DivertPipeline : IAsyncDisposable
                 $"udp.SrcPort >= {lanes.BasePort} and udp.SrcPort <= {lanes.LastPort})";
         }
 
-        return filter;
+        // DHCP must not even be captured: reinjecting a broadcast from 0.0.0.0 can break
+        // address acquisition before the adapter has an address (WinDivert issue #320).
+        // Wrap every capture clause, including optional relay/DNS clauses, in this exclusion.
+        return $"({filter}) and not ({DhcpTraffic.Filter})";
     }
 
     /// <summary>
@@ -1268,6 +1271,13 @@ public sealed class DivertPipeline : IAsyncDisposable
         }
 
         if (!view.HasPorts)
+        {
+            return PacketAction.Forward;
+        }
+
+        // Defence in depth if a DHCP packet reaches user mode despite the kernel exclusion.
+        // This runs before owner lookup, rule holds, NAT, DNS and packet rewriting.
+        if (DhcpTraffic.IsClientExchange(view))
         {
             return PacketAction.Forward;
         }
