@@ -344,7 +344,9 @@ public sealed class DivertPipeline : IAsyncDisposable
         // DHCP must not even be captured: reinjecting a broadcast from 0.0.0.0 can break
         // address acquisition before the adapter has an address (WinDivert issue #320).
         // Wrap every capture clause, including optional relay/DNS clauses, in this exclusion.
-        return $"({filter}) and not ({DhcpTraffic.Filter})";
+        // WinDivert's unary "not" applies to a field test, not an arbitrary group.
+        // Its conditional expression excludes DHCP before evaluating any capture clause.
+        return $"({DhcpTraffic.Filter} ? false : ({filter}))";
     }
 
     /// <summary>
