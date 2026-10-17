@@ -241,8 +241,7 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           if (-not $env:UPDATE_SIGNING_KEY) {
-              Write-Host 'No signing key configured: this release gets no update manifest.'
-              exit 0
+              throw 'UPDATE_SIGNING_KEY is required for an updateable release.'
           }
 
           $version = $env:REF_NAME -replace '^v', ''

@@ -126,12 +126,12 @@ public sealed class MainViewModel : ObservableObject
         if (string.Equals(now, from, StringComparison.Ordinal))
         {
             SetBanner(
-                $"The update did not install: this is still {UpdateRelauncher.DisplayVersion(now)}. The engine log says why.",
+                $"The update did not install: this is still {UpdateVersionText.DisplayVersion(now)}. The engine log says why.",
                 isError: true);
             return;
         }
 
-        _updateNotice = $"Updated to {UpdateRelauncher.DisplayVersion(now)} (from {UpdateRelauncher.DisplayVersion(from)}).";
+        _updateNotice = $"Updated to {UpdateVersionText.DisplayVersion(now)} (from {UpdateVersionText.DisplayVersion(from)}).";
         SetBanner(_updateNotice);
     }
 

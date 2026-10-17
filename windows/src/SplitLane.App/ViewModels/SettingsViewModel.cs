@@ -16,7 +16,6 @@ public sealed class SettingsViewModel : ObservableObject
     private bool _logsDirectFlows;
     private string _redirectPort = "0";
     private bool _installRequested;
-    private bool _reopensByItself;
 
     /// <summary>Builds the page.</summary>
     public SettingsViewModel(MainViewModel main)
@@ -255,14 +254,10 @@ public sealed class SettingsViewModel : ObservableObject
             ? FileVersionInfo.GetVersionInfo(path).ProductVersion
             : null;
 
-        // The installer closes this window to replace its files and cannot reopen it (it runs as
-        // SYSTEM, the window as the user), so a watcher started now does - see UpdateRelauncher.
-        // Remembering the running version lets the next window say whether the update took.
+        // Remember the running version so the next manual launch can report the result.
         UiSettings.Save(UiSettings.Load() with { UpdatingFrom = running });
-        var watcher = UpdateRelauncher.StartForThisProcess();
 
         _installRequested = true;
-        _reopensByItself = watcher is not null;
         RaiseUpdate();
         _main.SetBanner(InstallingMessage(target));
 
@@ -271,35 +266,22 @@ public sealed class SettingsViewModel : ObservableObject
         // side of the pipe cannot keep.
         var reply = await _main.Engine.ApplyUpdateAsync().ConfigureAwait(true);
 
-        // Only an explicit refusal ends it. A reply lost because the installer stopped the engine
-        // before it arrived is the install working, and the watcher gives up by itself if this
-        // window is never closed or the version never changes.
+        // An IPC reply can be lost when the installer stops the engine. The next launch
+        // compares versions; only an explicit refusal ends the request here.
         if (reply.Connected && reply.Response?.Kind == EngineResponseKind.Failure)
         {
-            // Nothing will close this window, so nothing should reopen it.
-            try
-            {
-                watcher?.Kill();
-            }
-            catch (InvalidOperationException)
-            {
-            }
-
             UiSettings.Save(UiSettings.Load() with { UpdatingFrom = null });
             _installRequested = false;
             _main.SetBanner($"The update could not be installed: {reply.Message}", isError: true);
         }
 
-        watcher?.Dispose();
         RaiseUpdate();
     }
 
-    private string InstallingMessage(string? target)
+    private static string InstallingMessage(string? target)
     {
         var version = target is { Length: > 0 } ? $" {target}" : string.Empty;
-        return _reopensByItself
-            ? $"Installing{version}. SplitLane closes while its files are replaced and reopens by itself in a few seconds."
-            : $"Installing{version}. SplitLane closes while its files are replaced; open it again when it is done.";
+        return $"Installing{version}. SplitLane closes while its files are replaced; open it again when it is done.";
     }
 
     private void RaiseUpdate()
