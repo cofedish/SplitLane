@@ -33,6 +33,9 @@ public enum EngineRequestKind
     /// <summary>Report engine state, flow counts, and the last error.</summary>
     RequestStatus,
 
+    /// <summary>Report engine status including download counters; legacy RequestStatus omits them.</summary>
+    RequestUpdateStatus,
+
     /// <summary>Re-read configuration from disk and swap the runtime snapshot atomically.</summary>
     ReloadConfiguration,
 
@@ -262,6 +265,11 @@ public sealed record EngineStatus
 
     /// <summary>Where the last update check or install got to. Names an UpdateState.</summary>
     public string? UpdateState { get; init; }
+
+    /// <summary>Downloaded installer bytes reported by the service.</summary>
+    public long? UpdateDownloadedBytes { get; init; }
+    /// <summary>Expected installer size; null if not known.</summary>
+    public long? UpdateDownloadTotalBytes { get; init; }
 
     /// <summary>The release waiting to be installed, when there is one.</summary>
     public string? UpdateVersion { get; init; }

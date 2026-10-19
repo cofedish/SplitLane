@@ -21,7 +21,7 @@
   -->
 
   <Package Name="SplitLane"
-           Manufacturer="SplitLane"
+           Manufacturer="cofedish"
            Version="$(BuildVersion)"
            UpgradeCode="8C6A7B4E-2D31-4F0A-9E77-5B1C0D2A9F14"
            Scope="perMachine"

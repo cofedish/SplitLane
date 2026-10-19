@@ -12,16 +12,20 @@
                     <TextBlock Text="Updates" Style="{StaticResource CardTitle}" />
 
                     <Grid Margin="0,14,0,0">
-                        <StackPanel>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Margin="0,0,16,0">
                             <TextBlock Style="{StaticResource BodyText}"
                                        AutomationProperties.AutomationId="InstalledVersion"
                                        Text="{Binding InstalledVersion, StringFormat=Installed version {0}}" />
                             <TextBlock Style="{StaticResource BodyText}" Margin="0,6,0,0"
                                        AutomationProperties.AutomationId="UpdateSummary"
-                                       Text="{Binding UpdateSummary}" />
+                                       TextWrapping="Wrap" Text="{Binding UpdateSummary}" />
                         </StackPanel>
 
-                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top">
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top">
                             <Button Content="Check now" Style="{StaticResource QuietButton}"
                                     AutomationProperties.AutomationId="CheckForUpdateButton"
                                     Command="{Binding CheckForUpdateCommand}" />
@@ -31,6 +35,12 @@
                                     Visibility="{Binding UpdateAvailable, Converter={StaticResource BoolToVisible}}" />
                         </StackPanel>
                     </Grid>
+
+                    <ProgressBar Height="8" Margin="0,14,0,0" Minimum="0" Maximum="100"
+                                 AutomationProperties.AutomationId="UpdateProgress"
+                                 Value="{Binding DownloadPercent}"
+                                 IsIndeterminate="{Binding UpdateProgressIndeterminate}"
+                                 Visibility="{Binding UpdateInProgress, Converter={StaticResource BoolToVisible}}" />
 
                     <Border Background="{DynamicResource SurfaceRaisedBrush}" CornerRadius="7"
                             Padding="14,12" Margin="0,16,0,0"
@@ -194,6 +204,7 @@
                     </Grid>
                     <TextBlock Style="{StaticResource BodyText}" Margin="0,8,0,0"
                                Text="Per-application network routing. Put selected applications in a proxy lane; leave everything else alone." />
+                    <TextBlock Text="cofedish" Style="{StaticResource BodyText}" Margin="0,8,0,0" />
                 </StackPanel>
             </Border>
         </StackPanel>

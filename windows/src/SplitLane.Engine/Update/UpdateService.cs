@@ -21,6 +21,12 @@ public enum UpdateState
     /// <summary>The installer is being fetched.</summary>
     Downloading,
 
+    /// <summary>The downloaded package is being authenticated.</summary>
+    Verifying,
+
+    /// <summary>Looking for a signed release.</summary>
+    Checking,
+
     /// <summary>The installer has been handed to Windows. The service is about to be restarted.</summary>
     Installing,
 
@@ -76,6 +82,18 @@ public sealed class UpdateService : IDisposable
     private readonly string _releaseKey;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private Timer? _timer;
+    private Task<bool>? _pendingApply;
+    internal Task<bool>? PendingApply => _pendingApply;
+    private volatile UpdateState _state;
+    private readonly CancellationTokenSource _shutdown = new();
+    private long _downloadedBytes;
+    private long _downloadTotal;
+
+    /// <summary>Bytes successfully stored in the protected staging file.</summary>
+    public long DownloadedBytes => Interlocked.Read(ref _downloadedBytes);
+    /// <summary>Expected download size, or null when the server does not provide one.</summary>
+    public long? DownloadTotalBytes => Interlocked.Read(ref _downloadTotal) is > 0 and var total ? total : null;
+
 
     /// <summary>Builds the service. Nothing is fetched until <see cref="Start"/>.</summary>
     public UpdateService()
@@ -104,7 +122,7 @@ public sealed class UpdateService : IDisposable
     public static ProductVersion CurrentVersion { get; } = ReadCurrentVersion();
 
     /// <summary>Where the last check or install got to.</summary>
-    public UpdateState State { get; private set; } = UpdateState.Unknown;
+    public UpdateState State { get => _state; private set => _state = value; }
 
     /// <summary>The release waiting to be installed, when there is one.</summary>
     public UpdateManifest? Available { get; private set; }
@@ -152,6 +170,7 @@ public sealed class UpdateService : IDisposable
             return State;
         }
 
+        State = UpdateState.Checking;
         try
         {
             var manifestJson = await FetchAsync(ManifestUrl, cancellationToken).ConfigureAwait(false);
@@ -223,9 +242,38 @@ public sealed class UpdateService : IDisposable
             return false;
         }
 
+        return await ApplyLockedAsync(manifest, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Accepts one background installation so status IPC remains responsive.</summary>
+    public bool BeginApply()
+    {
+        var manifest = Available;
+        if (DisabledByPolicy || manifest is null || State != UpdateState.Available || !_gate.Wait(0))
+            return false;
+        State = UpdateState.Downloading;
+        Interlocked.Exchange(ref _downloadedBytes, 0);
+        Interlocked.Exchange(ref _downloadTotal, 0);
+        _pendingApply = Task.Run(async () =>
+        {
+            try { return await ApplyLockedAsync(manifest, _shutdown.Token).ConfigureAwait(false); }
+            catch (Exception ex)
+            {
+                SplitLaneLog.Error(LogCategory, "background update failed", ex);
+                Fail("The update could not be prepared; see the engine log. Installation is not confirmed.");
+                return false;
+            }
+        });
+        return true;
+    }
+
+    private async Task<bool> ApplyLockedAsync(UpdateManifest manifest, CancellationToken cancellationToken)
+    {
         try
         {
             State = UpdateState.Downloading;
+            Interlocked.Exchange(ref _downloadedBytes, 0);
+            Interlocked.Exchange(ref _downloadTotal, 0);
 
             // The name is built here from a version that parsed as digits and dots, never taken from
             // the URL. It is cosmetic - the directory it lands in is new, random and SYSTEM-only.
@@ -233,7 +281,11 @@ public sealed class UpdateService : IDisposable
 
             var staged = await _staging.StageAsync(
                 fileName,
-                (destination, token) => DownloadAsync(manifest.Url, destination, token),
+                async (destination, token) =>
+                {
+                    await DownloadAsync(manifest.Url, destination, token).ConfigureAwait(false);
+                    State = UpdateState.Verifying;
+                },
                 manifest.Sha256,
                 cancellationToken).ConfigureAwait(false);
 
@@ -295,7 +347,9 @@ public sealed class UpdateService : IDisposable
             .ConfigureAwait(false);
 
         response.EnsureSuccessStatusCode();
-        await response.Content.CopyToAsync(destination, cancellationToken).ConfigureAwait(false);
+        Interlocked.Exchange(ref _downloadTotal, response.Content.Headers.ContentLength ?? 0);
+        using var progress = new DownloadProgressStream(destination, count => Interlocked.Add(ref _downloadedBytes, count));
+        await response.Content.CopyToAsync(progress, cancellationToken).ConfigureAwait(false);
     }
 
     private UpdateState Fail(string message)
@@ -330,7 +384,10 @@ public sealed class UpdateService : IDisposable
     {
         _timer?.Dispose();
         _timer = null;
-        _gate.Dispose();
+        _shutdown.Cancel();
+        if (_pendingApply is { IsCompleted: false } pending)
+            _ = pending.ContinueWith(_ => { _gate.Dispose(); _shutdown.Dispose(); }, TaskScheduler.Default);
+        else { _gate.Dispose(); _shutdown.Dispose(); }
         _http.Dispose();
     }
 }

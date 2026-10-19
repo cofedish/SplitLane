@@ -20,7 +20,8 @@
       process-wide switch.
     -->
     <Product>SplitLane</Product>
-    <Company>SplitLane</Company>
+    <Company>cofedish</Company>
+    <Authors>cofedish</Authors>
     <Version>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)release-version.txt').Trim())</Version>
     <NeutralLanguage>en</NeutralLanguage>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>

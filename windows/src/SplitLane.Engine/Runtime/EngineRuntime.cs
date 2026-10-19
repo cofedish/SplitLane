@@ -799,6 +799,8 @@ public sealed class EngineRuntime : IAsyncDisposable
         {
             EngineVersion = UpdateService.CurrentVersion.ToString(),
             UpdateState = _updates.State.ToString(),
+            UpdateDownloadedBytes = _updates.DownloadedBytes,
+            UpdateDownloadTotalBytes = _updates.DownloadTotalBytes,
             UpdateVersion = _updates.Available?.Version,
             UpdateNotes = _updates.Available?.Notes,
             UpdateError = _updates.LastError,

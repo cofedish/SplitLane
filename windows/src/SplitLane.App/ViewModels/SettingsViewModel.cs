@@ -16,14 +16,15 @@ public sealed class SettingsViewModel : ObservableObject
     private bool _logsDirectFlows;
     private string _redirectPort = "0";
     private bool _installRequested;
+    private string? _lastUpdateState;
 
     /// <summary>Builds the page.</summary>
     public SettingsViewModel(MainViewModel main)
     {
         _main = main ?? throw new ArgumentNullException(nameof(main));
 
-        CheckForUpdateCommand = new AsyncRelayCommand(CheckForUpdateAsync);
-        InstallUpdateCommand = new AsyncRelayCommand(InstallUpdateAsync);
+        CheckForUpdateCommand = new AsyncRelayCommand(CheckForUpdateAsync, () => !UpdateInProgress);
+        InstallUpdateCommand = new AsyncRelayCommand(InstallUpdateAsync, () => UpdateAvailable && !UpdateInProgress);
 
         OpenConfigurationFolderCommand = new RelayCommand(() => Reveal(_main.Store.ConfigurationPath));
         OpenLogCommand = new RelayCommand(
@@ -59,21 +60,32 @@ public sealed class SettingsViewModel : ObservableObject
 
     /// <summary>Whether the engine is in the middle of fetching or applying one.</summary>
     public bool UpdateInProgress =>
-        _installRequested || _main.Status?.UpdateState is "Downloading" or "Installing";
+        _installRequested || _main.Status?.UpdateState is "Checking" or "Downloading" or "Verifying" or "Installing";
 
     /// <summary>One line about where updates stand.</summary>
-    public string UpdateSummary => _installRequested
-        ? InstallingMessage(_main.Status?.UpdateVersion)
-        : _main.Status?.UpdateState switch
+    public string UpdateSummary => _main.Status?.UpdateState switch
     {
-        "Available" => $"Version {_main.Status?.UpdateVersion} is available. " +
-                       (_main.Status?.UpdateNotes ?? string.Empty),
-        "Downloading" => "Downloading the installer…",
-        "Installing" => "Installing. The engine restarts, so routing pauses for a few seconds.",
+        "Checking" => "Checking for updates…",
+        "Downloading" => DownloadSummary,
+        "Verifying" => "Checking the package hash and authenticity. Installation has not started.",
+        "Installing" => InstallingMessage(_main.Status?.UpdateVersion),
+        "Available" when !_installRequested => $"Version {_main.Status?.UpdateVersion} is available. " + (_main.Status?.UpdateNotes ?? string.Empty),
         "UpToDate" => "This is the newest release.",
-        "Failed" => $"The last check did not finish: {_main.Status?.UpdateError}",
-        _ => "SplitLane checks once a day, and installs nothing without being asked.",
+        "Failed" => $"The update failed: {_main.Status?.UpdateError}",
+        _ => _installRequested ? "Preparing the update. Keep this window open." : "SplitLane checks once a day, and installs nothing without being asked.",
     };
+
+    /// <summary>Download percentage only; verification and MSI execution are separate stages.</summary>
+    public double DownloadPercent => _main.Status?.UpdateDownloadTotalBytes is > 0 and var total
+        ? Math.Clamp(100.0 * Math.Max(0, _main.Status.UpdateDownloadedBytes ?? 0) / total, 0, 100) : 0;
+
+    /// <summary>Unknown totals and non-download stages have no invented percentage.</summary>
+    public bool UpdateProgressIndeterminate => _main.Status?.UpdateState != "Downloading" ||
+        _main.Status.UpdateDownloadTotalBytes is not > 0;
+
+    private string DownloadSummary => _main.Status?.UpdateDownloadTotalBytes is > 0 and var total
+        ? $"Downloading: {Math.Max(0, _main.Status.UpdateDownloadedBytes ?? 0) / 1048576.0:F1} of {total / 1048576.0:F1} MiB ({DownloadPercent:F0}%)."
+        : "Downloading the installer…";
 
     /// <summary>
     /// Which look the application wears.
@@ -224,6 +236,21 @@ public sealed class SettingsViewModel : ObservableObject
     /// <summary>Called when the engine status changed.</summary>
     public void OnStatusChanged()
     {
+        var state = _main.Status?.UpdateState;
+        if (state is "Downloading" or "Verifying" or "Installing" or "Failed" or "Disabled" or "UpToDate")
+            _installRequested = false;
+        if (state != _lastUpdateState)
+        {
+            if (state == "Failed")
+            {
+                UiSettings.Save(UiSettings.Load() with { UpdatingFrom = null });
+                _main.SetBanner(UpdateSummary, isError: true);
+            }
+            else if (state is "Downloading" or "Verifying" or "Installing")
+                _main.SetBanner(UpdateSummary);
+            _lastUpdateState = state;
+        }
+
         Raise(nameof(DriverStatus));
         Raise(nameof(DriverIsMissing));
         Raise(nameof(DriverIsHealthy));
@@ -249,7 +276,6 @@ public sealed class SettingsViewModel : ObservableObject
 
     private async Task InstallUpdateAsync()
     {
-        var target = _main.Status?.UpdateVersion;
         var running = Environment.ProcessPath is { } path
             ? FileVersionInfo.GetVersionInfo(path).ProductVersion
             : null;
@@ -259,7 +285,7 @@ public sealed class SettingsViewModel : ObservableObject
 
         _installRequested = true;
         RaiseUpdate();
-        _main.SetBanner(InstallingMessage(target));
+        _main.SetBanner(UpdateSummary);
 
         // The engine restarts itself as part of this, so the reply is an acknowledgement that the
         // installer started rather than that it finished. Saying otherwise would be a promise this
@@ -290,6 +316,9 @@ public sealed class SettingsViewModel : ObservableObject
         Raise(nameof(UpdateAvailable));
         Raise(nameof(UpdateInProgress));
         Raise(nameof(UpdateSummary));
+        Raise(nameof(DownloadPercent));
+        Raise(nameof(UpdateProgressIndeterminate));
+        System.Windows.Input.CommandManager.InvalidateRequerySuggested();
     }
 
     private static void Reveal(string path)

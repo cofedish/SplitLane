@@ -42,8 +42,13 @@ public sealed class EngineClient
     private const int ConnectTimeoutMilliseconds = 400;
 
     /// <summary>Asks the engine for its status.</summary>
-    public Task<EngineReply> StatusAsync(CancellationToken cancellationToken = default)
-        => SendAsync(new EngineRequest(EngineRequestKind.RequestStatus), cancellationToken);
+    public async Task<EngineReply> StatusAsync(CancellationToken cancellationToken = default)
+    {
+        var reply = await SendAsync(new EngineRequest(EngineRequestKind.RequestUpdateStatus), cancellationToken).ConfigureAwait(false);
+        return reply.Response?.Kind == EngineResponseKind.Failure
+            ? await SendAsync(new EngineRequest(EngineRequestKind.RequestStatus), cancellationToken).ConfigureAwait(false)
+            : reply;
+    }
 
     /// <summary>Asks for the recent connection list.</summary>
     public Task<EngineReply> ActivityAsync(int limit, CancellationToken cancellationToken = default)

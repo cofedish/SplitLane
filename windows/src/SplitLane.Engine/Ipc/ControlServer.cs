@@ -240,6 +240,10 @@ public sealed class ControlServer : IAsyncDisposable
         switch (request.Kind)
         {
             case EngineRequestKind.RequestStatus:
+                // Legacy clients reject unknown fields. Only the new request opts into counters.
+                return new EngineResponse(EngineResponseKind.Status, Status: _runtime.Status() with
+                    { UpdateDownloadedBytes = null, UpdateDownloadTotalBytes = null });
+            case EngineRequestKind.RequestUpdateStatus:
                 return new EngineResponse(EngineResponseKind.Status, Status: _runtime.Status());
 
             case EngineRequestKind.RequestActivity:
@@ -315,7 +319,7 @@ public sealed class ControlServer : IAsyncDisposable
                 // (a service restart). Choosing *what* is installed is impossible from here, and
                 // changing the package between verification and msiexec is closed separately by
                 // UpdateStaging (SL-SEC-001). A managed policy can still turn self-update off.
-                return await _runtime.Updates.ApplyAsync().ConfigureAwait(false)
+                return _runtime.Updates.BeginApply()
                     ? EngineResponse.Ok
                     : EngineResponse.Failed(_runtime.Updates.LastError ?? "the update could not be applied");
 
