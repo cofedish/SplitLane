@@ -261,13 +261,14 @@ master switch, so no state can route the engine's upstream connection back into 
 service (`svchost.exe`), which is a different process from the application; the query has already
 left the machine by the time SplitLane sees a connection to the resulting address.
 
-What the engine does instead is sniff DNS *answers* and remember which name an address came from, so
-that the SOCKS5 request can use `ATYP=DOMAIN` and let the upstream resolve the name from its own
-vantage point. Without that, a CDN hands you an edge node chosen for where *you* are rather than
-where the proxy is.
+The engine observes DNS queries and answers as bounded evidence for domain policies. This evidence
+is not the application's intended TLS name: even one live alias for an IP can belong to another
+application or a request made after the application's answer entered its own cache.
 
-This improves routing quality. It does nothing for privacy, and the UI says so on the Overview page
-rather than leaving it to be discovered.
+Transparent TCP relays therefore send the original IP and port to HTTP CONNECT and SOCKS5, without
+replacing them with a DNS-observed name. TLS bytes, including SNI, are passed unchanged. Legacy
+`preferHostnames` values are accepted for configuration compatibility but do not change the target.
+See ADR 0017 for the certificate-name failure this prevents.
 
 ### What an unproxied lookup costs
 
@@ -286,17 +287,16 @@ That path has these consequences for a selected application:
    (Windows 11) the network no longer sees it; the resolver still does.
 2. **Blocking or poisoning happens before SplitLane is involved.** A resolver that answers NXDOMAIN
    or refuses leaves the application with nothing to connect to, and no routing decision can fix that.
-   A resolver that answers with a wrong address is mostly survived: the engine sees the answer, sends
-   the *name* to the proxy with `ATYP=DOMAIN`, and the proxy resolves it itself. Not when the name
-   was cached before the engine started or was resolved over encrypted DNS the engine cannot read -
-   then the proxy is given the wrong address as a literal.
+   A resolver that returns a wrong address leaves the relay with that wrong destination too; TLS
+   certificate validation remains the application's responsibility. The relay does not repair DNS
+   by guessing a hostname from an IP.
 3. **Names that only exist on the far side do not resolve.** An intranet reachable only through the
    proxy - `git.corp.internal` behind a remote office's SOCKS server - has no answer in local DNS, so
    the application fails before it connects. The reverse also bites: a split-horizon corporate DNS
    hands out an internal address the proxy side cannot reach.
-4. **Geography and CDNs.** With the name known, the proxy resolves it from where it is and gets its
-   own nearest edge. Without it (cached answers, encrypted DNS), the proxy is asked to connect to the
-   edge chosen for *this* machine - slower, or refused by a service that checks region.
+4. **Geography and CDNs.** The proxy connects to the edge chosen by the application's local
+   resolver. This can affect latency or regional availability. Preserving the socket destination
+   takes precedence over choosing a different edge by an unverified DNS alias.
 5. **"All of this application's traffic goes through the proxy" is not literally true.** For
    compliance regimes that require every egress of an application to be inspected or logged at the
    proxy, DNS is egress too. It is also the classic exfiltration channel: data encoded into lookups
@@ -307,7 +307,7 @@ That path has these consequences for a selected application:
 It is **acceptable** - the default reading of this product - when the proxy is used to reach services
 (an API that must be reached from a given region or network, a corporate egress for particular
 applications), local DNS is trustworthy and complete, and the hostnames themselves are not sensitive.
-`ATYP=DOMAIN` already takes care of CDN placement in that case.
+The proxy uses the original destination; it does not select a different CDN edge by hostname.
 
 It is **needed** when any of these holds:
 

@@ -557,14 +557,32 @@ public sealed class HttpProxyIntegrationTests
         Assert.StartsWith("CONNECT chatgpt.com:443 | chatgpt.com:443 |", Assert.Single(proxy.Requests));
     }
 
-    [Fact]
-    public void AHostnameThatCouldInjectHeadersIsReplacedByTheAddress()
+    [Theory]
+    [InlineData(true, "bridge.claudeusercontent.com")]
+    [InlineData(true, "localhost")]
+    [InlineData(false, "assets-proxy.anthropic.com")]
+    [InlineData(true, null)]
+    public async Task ATransparentHttpTunnelPreservesTheAddressDespiteASingleDnsAlias(bool legacyPreference, string? alias)
     {
-        var proxy = Http(3128);
+        // No live destination/DNS dependency: the proxy records CONNECT and returns 503.
+        // A single alias is intentionally NOT ambiguous to DnsObserver, including in 0.12+.
+        var dns = new DnsObserver();
+        if (alias is not null)
+        {
+            dns.Record(IPAddress.Loopback, alias);
+        }
+        Assert.Equal(alias, dns.Lookup(IPAddress.Loopback));
+        await using var proxy = new HttpProxyTestServer(new HttpProxyTestServerOptions { RespondWith = 503 });
+        var nat = new NatTable();
+        await using var listener = new RedirectListener(
+            nat, new EngineStatistics(), () => Http(proxy.Port) with { PreferHostnames = legacyPreference }, () => null)
+        { SessionIdForProcess = _ => 1 };
+        listener.Start(0);
 
-        Assert.Equal("93.184.216.34", UpstreamConnector.TargetHost(proxy, "evil.com\r\nX-Injected: 1", "93.184.216.34"));
-        Assert.Equal("example.com", UpstreamConnector.TargetHost(proxy, "example.com", "93.184.216.34"));
-        Assert.Equal("93.184.216.34", UpstreamConnector.TargetHost(proxy with { PreferHostnames = false }, "example.com", "93.184.216.34"));
+        using var client = await ConnectThroughListenerAsync(listener, nat, 443, dns.Lookup(IPAddress.Loopback));
+        var request = await WaitForAsync(() => proxy.Requests.FirstOrDefault());
+
+        Assert.StartsWith("CONNECT 127.0.0.1:443 | 127.0.0.1:443 |", request);
     }
 
     // ---- Whose fault -------------------------------------------------------------------------
@@ -674,7 +692,7 @@ public sealed class HttpProxyIntegrationTests
 
     // ---- Helpers -----------------------------------------------------------------------------
 
-    private static async Task<Socket> ConnectThroughListenerAsync(RedirectListener listener, NatTable nat, ushort echoPort)
+    private static async Task<Socket> ConnectThroughListenerAsync(RedirectListener listener, NatTable nat, ushort echoPort, string? hostname = null)
     {
         var client = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
         client.Bind(new IPEndPoint(IPAddress.Loopback, 0));
@@ -687,7 +705,7 @@ public sealed class HttpProxyIntegrationTests
             (uint)Environment.ProcessId,
             @"C:\Program Files\Codex\Codex.exe",
             "Codex",
-            null,
+            hostname,
             DateTimeOffset.UtcNow));
 
         await client.ConnectAsync(new IPEndPoint(IPAddress.Loopback, listener.Port));

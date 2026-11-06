@@ -143,6 +143,52 @@ public sealed class RoutingRecoveryTests : IDisposable
         Assert.Equal(DivertState.Running, runtime.State);
     }
 
+    [Fact]
+    public async Task ResumeRebuildsRoutingWithoutChangingItsConfiguration()
+    {
+        await using var runtime = Runtime();
+        runtime.LoadConfiguration();
+        await runtime.StartAsync();
+        var configuration = runtime.Configuration;
+
+        runtime.ReportSystemResume();
+        await Until(() => runtime.Recoveries == 1, TimeSpan.FromSeconds(10));
+
+        Assert.Equal(DivertState.Running, runtime.State);
+        Assert.Same(configuration, runtime.Configuration);
+        Assert.NotEqual(0, runtime.Status().RedirectPort);
+    }
+
+    [Fact]
+    public async Task ResumeDoesNotEnableRoutingStoppedByTheUser()
+    {
+        await using var runtime = Runtime();
+        runtime.LoadConfiguration();
+        await runtime.StartAsync();
+        await runtime.StopAsync();
+
+        runtime.ReportSystemResume();
+        await Task.Delay(300);
+
+        Assert.Equal(DivertState.Stopped, runtime.State);
+        Assert.Equal(0, runtime.Recoveries);
+    }
+
+    [Fact]
+    public async Task StoppingDuringPendingResumeRecoveryLeavesRoutingStopped()
+    {
+        await using var runtime = Runtime();
+        runtime.RecoveryBackoff = [TimeSpan.FromMilliseconds(200)];
+        runtime.LoadConfiguration();
+        await runtime.StartAsync();
+        runtime.ReportSystemResume();
+        await runtime.StopAsync();
+        await Task.Delay(350);
+
+        Assert.Equal(DivertState.Stopped, runtime.State);
+        Assert.Equal(0, runtime.Recoveries);
+    }
+
     public void Dispose()
     {
         try

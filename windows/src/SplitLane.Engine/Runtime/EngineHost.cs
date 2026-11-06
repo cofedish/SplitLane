@@ -70,6 +70,9 @@ internal sealed class EngineHost : IAsyncDisposable
         }
     }
 
+    /// <summary>Refreshes the network generation after Windows resumes from sleep.</summary>
+    internal void ReportSystemResume() => _runtime?.ReportSystemResume();
+
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {

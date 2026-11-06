@@ -144,15 +144,12 @@ public sealed record ProxyConfiguration
     /// </remarks>
     public bool AllowDirectFallback { get; init; }
 
-    /// <summary>
-    /// Whether to send <c>ATYP=DOMAIN</c> when the DNS observer knows a name for the destination.
-    /// </summary>
+    /// <summary>Legacy configuration field, retained for schema compatibility.</summary>
     /// <remarks>
-    /// On by default. Sending the IP the client already resolved locally pins the connection to
-    /// whatever the local resolver returned, which for a CDN means the upstream connects to an edge
-    /// node chosen for the client's location rather than its own.
+    /// Transparent TCP relays always preserve the original IP destination. A DNS-observed alias
+    /// cannot establish the application's intended hostname, so this flag no longer changes it.
     /// </remarks>
-    public bool PreferHostnames { get; init; } = true;
+    public bool PreferHostnames { get; init; }
 
     /// <summary>Whether authentication is configured.</summary>
     [JsonIgnore]

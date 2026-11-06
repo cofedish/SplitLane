@@ -19,28 +19,6 @@ public sealed class UpstreamConnector
 {
     private readonly HttpAuthenticationMemory _authentication = new();
 
-    /// <summary>
-    /// The name to ask the proxy for: the hostname the application resolved, when there is one and
-    /// the configuration prefers it, otherwise the address it connected to.
-    /// </summary>
-    /// <remarks>
-    /// A name that cannot be written into an HTTP request line - it came out of a DNS answer, and a
-    /// DNS label can hold anything - is replaced by the address rather than refused.
-    /// </remarks>
-    public static string TargetHost(ProxyConfiguration proxy, string? hostname, string address)
-    {
-        ArgumentNullException.ThrowIfNull(proxy);
-
-        if (!proxy.PreferHostnames || string.IsNullOrEmpty(hostname))
-        {
-            return address;
-        }
-
-        return proxy.Type == ProxyProtocolType.Http && !HttpConnectRequest.IsValidHost(hostname)
-            ? address
-            : hostname;
-    }
-
     /// <summary>Opens a tunnel to <paramref name="host"/>:<paramref name="port"/>.</summary>
     /// <exception cref="UpstreamProxyException">Every failure, for either protocol.</exception>
     public async Task<UpstreamTunnel> ConnectAsync(

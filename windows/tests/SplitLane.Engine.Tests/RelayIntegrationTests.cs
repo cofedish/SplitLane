@@ -228,25 +228,26 @@ public sealed class RelayIntegrationTests
         Assert.Equal(new string('A', 200_000), received.ToString());
     }
 
-    // ---- Hostname preference -------------------------------------------------------------------
+    // ---- Original destination -------------------------------------------------------------------
 
     [Fact]
-    public async Task AKnownHostnameIsSentAsAtypDomainSoTheUpstreamResolvesIt()
+    public async Task AKnownDnsAliasDoesNotReplaceTheTransparentSocksDestination()
     {
         await using var echo = new EchoServer();
         await using var proxy = new Socks5TestServer();
 
         var nat = new NatTable();
         await using var listener = new RedirectListener(
-            nat, new EngineStatistics(), () => ProxyOn(proxy.Port), () => null);
+            nat, new EngineStatistics(), () => ProxyOn(proxy.Port), () => null)
+        { SessionIdForProcess = _ => 1 };
 
         listener.Start(0);
 
         using var client = await ConnectThroughListenerAsync(listener, nat, EntryFor(echo.Port, "localhost"));
         await RoundTripAsync(client, "x");
 
-        Assert.Equal(0x03, proxy.LastRequestedAddressType);
-        Assert.Equal("localhost", proxy.LastRequestedHost);
+        Assert.Equal(0x01, proxy.LastRequestedAddressType);
+        Assert.Equal("127.0.0.1", proxy.LastRequestedHost);
     }
 
     [Fact]

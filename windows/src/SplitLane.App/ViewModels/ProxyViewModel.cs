@@ -17,7 +17,7 @@ public sealed class ProxyViewModel : ObservableObject
     private string _username = string.Empty;
     private string _password = string.Empty;
     private bool _passwordEdited;
-    private bool _preferHostnames = true;
+    private bool _preferHostnames;
     private string _timeoutSeconds = "10";
     private string? _testResult;
     private bool _testFailed;
@@ -192,7 +192,7 @@ public sealed class ProxyViewModel : ObservableObject
         }
     }
 
-    /// <summary>Whether to send hostnames to the upstream when one is known.</summary>
+    /// <summary>Legacy field preserved when reading and saving an older configuration.</summary>
     public bool PreferHostnames
     {
         get => _preferHostnames;

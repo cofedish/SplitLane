@@ -35,6 +35,9 @@ internal sealed class EngineWindowsService : ServiceBase
         ServiceName = ServiceKey;
         CanStop = true;
         CanShutdown = true;
+        CanHandlePowerEvent = true;
+        // Lock/unlock and UI disconnects do not control this LocalSystem service.
+        CanHandleSessionChangeEvent = false;
 
         // The engine keeps its own log, with reasons and remedies in it. Letting ServiceBase also
         // write to the Application event log would duplicate every start and stop into a place
@@ -88,6 +91,23 @@ internal sealed class EngineWindowsService : ServiceBase
         // away, instead of leaving a reader to guess between a crash and a shutdown.
         SplitLaneLog.Info(LogCategory, "machine shutting down");
         ShutDownHost();
+    }
+
+    /// <inheritdoc />
+    protected override bool OnPowerEvent(PowerBroadcastStatus powerStatus) =>
+        DispatchPowerEvent(powerStatus, () => _host?.ReportSystemResume());
+
+    internal static bool DispatchPowerEvent(PowerBroadcastStatus powerStatus, Action resumed)
+    {
+        // Windows sends ResumeAutomatic on every wake. ResumeSuspend may follow it for an
+        // interactive wake; acting on both would tear down the freshly recovered generation twice.
+        if (powerStatus == PowerBroadcastStatus.ResumeAutomatic)
+        {
+            SplitLaneLog.Info(LogCategory, "machine resumed; scheduling routing recovery");
+            resumed();
+        }
+        // Keep capture open during suspend preparation and do not veto the machine's power policy.
+        return true;
     }
 
     private void ShutDownHost()

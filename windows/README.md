@@ -174,8 +174,8 @@ there is deliberately no message that names a file to open, a command to run, or
 
 - **DNS is not proxied.** Windows resolves the name in the DNS Client service before SplitLane sees
   the connection. A network observer still learns which hosts a proxied application contacts. The
-  engine sniffs DNS *answers* to recover hostnames for `ATYP=DOMAIN`, which improves CDN behaviour
-  and does nothing whatsoever for privacy.
+  engine observes DNS for domain-policy evidence. Transparent TCP tunnels preserve the application's
+  original IP/port; they never replace it with a DNS-observed alias. CDN placement follows local DNS.
 - **Unselected traffic transits user mode.** See the comparison table above. This is the single
   largest behavioural difference from macOS.
 - **Pausing is not switching off.** While the engine is routing, its divert handles are open whether

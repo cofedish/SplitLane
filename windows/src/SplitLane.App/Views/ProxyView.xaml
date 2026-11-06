@@ -183,18 +183,6 @@
                 <StackPanel>
                     <TextBlock Text="Behaviour" Style="{StaticResource CardTitle}" />
 
-                    <Grid Margin="0,16,0,0">
-                        <StackPanel MaxWidth="600" HorizontalAlignment="Left">
-                            <TextBlock Text="Send hostnames to the proxy" FontSize="13"
-                                       Foreground="{DynamicResource TextBrush}" />
-                            <TextBlock Style="{StaticResource BodyText}" Margin="0,5,0,0"
-                                       Text="When SplitLane knows the name a destination was resolved from, it sends the name rather than the address, so the proxy resolves it from its own location. Without this, a CDN gives you an edge node chosen for where you are instead of where the proxy is." />
-                        </StackPanel>
-                        <ToggleButton Style="{StaticResource Switch}" HorizontalAlignment="Right"
-                                      VerticalAlignment="Top"
-                                      AutomationProperties.AutomationId="PreferHostnamesSwitch"
-                                      IsChecked="{Binding PreferHostnames}" />
-                    </Grid>
 
                     <Border Background="{DynamicResource SurfaceRaisedBrush}" CornerRadius="7"
                             Padding="14,12" Margin="0,18,0,0">

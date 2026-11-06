@@ -55,6 +55,9 @@ public sealed class RedirectListener : IAsyncDisposable
         _upstream = upstream ?? new UpstreamConnector();
     }
 
+    // Session lookup is platform-specific; portable relay tests supply their caller's session.
+    internal Func<uint, uint?> SessionIdForProcess { get; init; } = Interop.ProcessSessions.Of;
+
     private const string LogCategory = "redirect";
 
     private int _active;
@@ -268,7 +271,7 @@ public sealed class RedirectListener : IAsyncDisposable
                 ExecutablePath = entry.ExecutablePath,
                 ApplicationName = entry.ApplicationName,
                 ProcessId = entry.ProcessId,
-                SessionId = Interop.ProcessSessions.Of(entry.ProcessId),
+                SessionId = SessionIdForProcess(entry.ProcessId),
                 DestinationHost = entry.Hostname ?? entry.OriginalDestination.ToString(),
                 DestinationPort = entry.OriginalDestinationPort,
                 Protocol = FlowProtocol.Tcp,
@@ -279,7 +282,10 @@ public sealed class RedirectListener : IAsyncDisposable
             _statistics.Record(record);
             _statistics.MarkLive(record.Id);
 
-            var destination = UpstreamConnector.TargetHost(proxy, entry.Hostname, entry.OriginalDestination.ToString());
+            // DNS observations describe an IP, not the hostname this application intended. Even a
+            // single observed alias can be wrong when the application's answer was cached or
+            // encrypted. Preserve the original socket destination; leave TLS/SNI byte-for-byte.
+            var destination = entry.OriginalDestination.ToString();
 
             using var tunnel = await _upstream
                 .ConnectAsync(proxy, destination, entry.OriginalDestinationPort, _credential(), cancellationToken)

@@ -512,17 +512,28 @@ public sealed class EngineRuntime : IAsyncDisposable
     /// <summary>
     /// Starts routing: binds the listener, then opens the divert handles.
     /// </summary>
-    public async Task StartAsync()
+    public Task StartAsync() => StartAsync(requestRouting: true);
+
+    private async Task StartAsync(bool requestRouting)
     {
         // Independent of whether the divert layer comes up. A machine that cannot load the driver is
         // a machine that most wants the release which might fix that.
         _updates.Start();
 
-        _routingWanted = true;
+        if (requestRouting)
+        {
+            _routingWanted = true;
+        }
 
         await _lifecycle.WaitAsync().ConfigureAwait(false);
         try
         {
+            // Recovery must not undo a user stop or a service shutdown that won this lock.
+            if (!_routingWanted || _stopping.IsCancellationRequested)
+            {
+                return;
+            }
+
             if (_state is DivertState.Running or DivertState.Starting or DivertState.Paused)
             {
                 return;
@@ -639,6 +650,12 @@ public sealed class EngineRuntime : IAsyncDisposable
         ScheduleRecovery();
     }
 
+    /// <summary>Rebuilds stale transport state after wake, without enabling stopped routing.</summary>
+    internal void ReportSystemResume()
+    {
+        ReportRoutingFault("system resumed; refreshing proxy transports and packet capture");
+    }
+
     private void ScheduleRecovery()
     {
         if (!_routingWanted || _stopping.IsCancellationRequested || Interlocked.Exchange(ref _recovering, 1) != 0)
@@ -689,7 +706,7 @@ public sealed class EngineRuntime : IAsyncDisposable
                     // StartAsync schedules nothing while this attempt holds the recovery slot; a
                     // failure comes back here as an exception, and a divert thread that dies straight
                     // away as _faultPending, and the loop waits longer.
-                    await StartAsync().ConfigureAwait(false);
+                    await StartAsync(requestRouting: false).ConfigureAwait(false);
 
                     if (!_faultPending && _state is DivertState.Running or DivertState.Paused)
                     {
@@ -761,6 +778,7 @@ public sealed class EngineRuntime : IAsyncDisposable
         }
 
         _nat.Clear();
+        _dns.Clear();
         _processes.Clear();
         _startedAt = null;
     }
