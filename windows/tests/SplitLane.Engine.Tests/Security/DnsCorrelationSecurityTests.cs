@@ -82,6 +82,53 @@ public sealed class DnsCorrelationSecurityTests
         Assert.Equal("example.com", observer.Lookup(Answer));
     }
 
+    [Theory]
+    [InlineData(5, 300)]
+    [InlineData(300, 5)]
+    [InlineData(0, 300)]
+    [InlineData(300, 0)]
+    public void DuplicateAddressRecordsUseTheShortestTtlRegardlessOfOrder(int firstTtl, int secondTtl)
+    {
+        var clock = new FakeTimeProvider();
+        var observer = Observer(clock);
+        Ask(observer);
+        var first = TestDns.Response("example.com", Answer, ttl: (uint)firstTtl);
+        var second = TestDns.Response("example.com", Answer, ttl: (uint)secondTtl);
+        var reply = first.Concat(second[^16..]).ToArray(); // second compressed A resource record
+        reply[7] = 2;
+        observer.IngestResponse(DnsTransport.Udp, Resolver, Client, reply);
+
+        if (Math.Min(firstTtl, secondTtl) == 0)
+        {
+            Assert.Null(observer.Lookup(Answer));
+        }
+        else
+        {
+            Assert.Equal("example.com", observer.Lookup(Answer));
+            clock.Advance(TimeSpan.FromSeconds(Math.Min(firstTtl, secondTtl)));
+            Assert.Null(observer.Lookup(Answer));
+        }
+    }
+
+    [Fact]
+    public void DifferentAddressesInOneRrsetExpireAtTheShortestTtl()
+    {
+        var clock = new FakeTimeProvider();
+        var observer = Observer(clock);
+        var other = IPAddress.Parse("203.0.113.55");
+        Ask(observer);
+        var first = TestDns.Response("example.com", Answer, ttl: 5);
+        var second = TestDns.Response("example.com", other, ttl: 300);
+        var reply = first.Concat(second[^16..]).ToArray();
+        reply[7] = 2;
+        observer.IngestResponse(DnsTransport.Udp, Resolver, Client, reply);
+        Assert.Equal("example.com", observer.Lookup(other));
+
+        clock.Advance(TimeSpan.FromSeconds(5));
+        Assert.Null(observer.Lookup(Answer));
+        Assert.Null(observer.Lookup(other));
+    }
+
     [Fact]
     public void ACnameCannotExtendTheShorterAliasTtl()
     {

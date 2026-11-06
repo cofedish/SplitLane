@@ -445,11 +445,15 @@ public sealed class DnsObserver(TimeProvider? timeProvider = null)
             }
 
             var now = _time.GetUtcNow();
-            foreach (var answer in learned)
+            // RFC 2181 section 5.2: inconsistent TTLs in one RRset use its lowest TTL.
+            // In particular a later duplicate must not extend an earlier or zero-TTL answer.
+            var rrsetTtls = learned.GroupBy(a => (a.Owner, a.Address.AddressFamily))
+                .ToDictionary(g => g.Key, g => g.Min(a => a.Ttl));
+            foreach (var group in learned.GroupBy(a => a.Address))
             {
-                var seconds = Math.Min(answer.Ttl, reachable[answer.Owner]);
+                var seconds = group.Min(a => Math.Min(rrsetTtls[(a.Owner, a.Address.AddressFamily)], reachable[a.Owner]));
                 var lifetime = TimeSpan.FromSeconds(Math.Min(seconds, EntryLifetime.TotalSeconds));
-                Add(answer.Address, questionName, now + lifetime);
+                Add(group.Key, questionName, now + lifetime);
             }
         }
         return learned.Length;
