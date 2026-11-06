@@ -239,7 +239,7 @@ public sealed class RelayIntegrationTests
         var nat = new NatTable();
         await using var listener = new RedirectListener(
             nat, new EngineStatistics(), () => ProxyOn(proxy.Port), () => null)
-        { SessionIdForProcess = _ => 1 };
+        { SessionIdForProcess = _ => 1, EnableIpv6Listener = false };
 
         listener.Start(0);
 

@@ -576,7 +576,7 @@ public sealed class HttpProxyIntegrationTests
         var nat = new NatTable();
         await using var listener = new RedirectListener(
             nat, new EngineStatistics(), () => Http(proxy.Port) with { PreferHostnames = legacyPreference }, () => null)
-        { SessionIdForProcess = _ => 1 };
+        { SessionIdForProcess = _ => 1, EnableIpv6Listener = false };
         listener.Start(0);
 
         using var client = await ConnectThroughListenerAsync(listener, nat, 443, dns.Lookup(IPAddress.Loopback));

@@ -58,6 +58,10 @@ public sealed class RedirectListener : IAsyncDisposable
     // Session lookup is platform-specific; portable relay tests supply their caller's session.
     internal Func<uint, uint?> SessionIdForProcess { get; init; } = Interop.ProcessSessions.Of;
 
+    // Portable tests can bind only IPv4 on runners without an IPv6 loopback interface.
+    // Production always retains both listeners; this is not a configuration or IPC setting.
+    internal bool EnableIpv6Listener { get; init; } = true;
+
     private const string LogCategory = "redirect";
 
     private int _active;
@@ -157,18 +161,38 @@ public sealed class RedirectListener : IAsyncDisposable
         var v6Address = AcceptOnAllAddresses ? IPAddress.IPv6Any : IPAddress.IPv6Loopback;
         var v4Address = AcceptOnAllAddresses ? IPAddress.Any : IPAddress.Loopback;
 
-        var v6 = new Socket(AddressFamily.InterNetworkV6, SocketType.Stream, ProtocolType.Tcp);
-        v6.SetSocketOption(SocketOptionLevel.IPv6, SocketOptionName.IPv6Only, true);
-        v6.Bind(new IPEndPoint(v6Address, requestedPort));
-        v6.Listen(512);
-        _listeners.Add(v6);
-
-        Port = (ushort)((IPEndPoint)v6.LocalEndPoint!).Port;
+        Port = requestedPort;
+        if (EnableIpv6Listener)
+        {
+            var v6 = new Socket(AddressFamily.InterNetworkV6, SocketType.Stream, ProtocolType.Tcp);
+            try
+            {
+                v6.SetSocketOption(SocketOptionLevel.IPv6, SocketOptionName.IPv6Only, true);
+                v6.Bind(new IPEndPoint(v6Address, requestedPort));
+                v6.Listen(512);
+                _listeners.Add(v6);
+                Port = (ushort)((IPEndPoint)v6.LocalEndPoint!).Port;
+            }
+            catch
+            {
+                v6.Dispose();
+                throw;
+            }
+        }
 
         var v4 = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-        v4.Bind(new IPEndPoint(v4Address, Port));
-        v4.Listen(512);
-        _listeners.Add(v4);
+        try
+        {
+            v4.Bind(new IPEndPoint(v4Address, Port));
+            v4.Listen(512);
+            _listeners.Add(v4);
+            Port = (ushort)((IPEndPoint)v4.LocalEndPoint!).Port;
+        }
+        catch
+        {
+            v4.Dispose();
+            throw;
+        }
     }
 
     private void CloseListeners()

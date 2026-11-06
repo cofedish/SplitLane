@@ -35,6 +35,94 @@ public sealed class DnsCorrelationSecurityTests
     }
 
     [Fact]
+    public void RetransmittingAPendingQueryDoesNotEvictAnotherPendingQuery()
+    {
+        var observer = new DnsObserver { MaxPendingQueries = 2 };
+        Ask(observer, "first.example", id: 1);
+        Ask(observer, "second.example", id: 2);
+        Ask(observer, "second.example", id: 2);
+
+        Assert.Equal(2, observer.PendingQueryCount);
+        Assert.Equal(1, observer.IngestResponse(DnsTransport.Udp, Resolver, Client,
+            TestDns.Response("first.example", Answer, id: 1)));
+        Assert.Equal("first.example", observer.Lookup(Answer));
+    }
+
+    [Theory]
+    [InlineData(0)] // NOERROR with no answers (NODATA)
+    [InlineData(2)] // SERVFAIL
+    [InlineData(3)] // NXDOMAIN
+    public void ACorrelatedEmptyOrNegativeReplyCompletesItsQuery(int responseCode)
+    {
+        var observer = Observer();
+        Ask(observer);
+        var reply = TestDns.Query("example.com");
+        reply[2] = 0x81;
+        reply[3] = (byte)(0x80 | responseCode);
+
+        Assert.Equal(0, observer.IngestResponse(DnsTransport.Udp, Resolver, Client, reply));
+        Assert.Equal(0, observer.PendingQueryCount);
+        Assert.Equal(0, observer.IngestResponse(DnsTransport.Udp, Resolver, Client,
+            TestDns.Response("example.com", Answer)));
+        Assert.Null(observer.Lookup(Answer));
+    }
+
+    [Fact]
+    public void RefreshingIpv4DoesNotDiscardAnUnexpiredIpv6Answer()
+    {
+        var observer = Observer();
+        var ipv6 = IPAddress.Parse("2001:db8::1234");
+        Ask(observer, type: 28);
+        Assert.Equal(1, observer.IngestResponse(DnsTransport.Udp, Resolver, Client,
+            TestDns.Response("example.com", ipv6, type: 28)));
+        Ask(observer);
+        Assert.Equal(1, observer.IngestResponse(DnsTransport.Udp, Resolver, Client,
+            TestDns.Response("example.com", Answer)));
+        Assert.Equal("example.com", observer.Lookup(ipv6));
+        Assert.Equal("example.com", observer.Lookup(Answer));
+    }
+
+    [Fact]
+    public void ACnameCannotExtendTheShorterAliasTtl()
+    {
+        var clock = new FakeTimeProvider();
+        var observer = Observer(clock);
+        const string alias = "alias.example";
+        const string canonical = "canonical.example";
+        Ask(observer, alias);
+        var reply = TestDns.Query(alias).ToList();
+        reply[2] = 0x81;
+        reply[3] = 0x80;
+        reply[7] = 2;
+        var target = TestDns.EncodeName(canonical);
+        reply.AddRange(new byte[] { 0xC0, 0x0C, 0, 5, 0, 1, 0, 0, 0, 5, 0, (byte)target.Length });
+        reply.AddRange(target);
+        reply.AddRange(TestDns.EncodeName(canonical));
+        reply.AddRange(new byte[] { 0, 1, 0, 1, 0, 0, 1, 44, 0, 4 });
+        reply.AddRange(Answer.GetAddressBytes());
+
+        Assert.Equal(1, observer.IngestResponse(DnsTransport.Udp, Resolver, Client, reply.ToArray()));
+        Assert.Equal(alias, observer.Lookup(Answer));
+        clock.Advance(TimeSpan.FromSeconds(5));
+        Assert.Null(observer.Lookup(Answer));
+    }
+
+    [Fact]
+    public void ClearingAfterResumeRejectsRepliesFromBeforeResume()
+    {
+        var observer = Observer();
+        observer.Record(Answer, "cached.example");
+        Ask(observer);
+        observer.Clear();
+
+        Assert.Equal(0, observer.PendingQueryCount);
+        Assert.Equal(0, observer.Count);
+        Assert.Equal(0, observer.IngestResponse(DnsTransport.Udp, Resolver, Client,
+            TestDns.Response("example.com", Answer)));
+        Assert.Null(observer.Lookup(Answer));
+    }
+
+    [Fact]
     public void A_matching_answer_is_learned()
     {
         var observer = Observer();

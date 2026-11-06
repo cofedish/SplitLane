@@ -27,8 +27,8 @@ public enum DnsTransport
 /// </para>
 /// <para>
 /// So the name is recovered rather than intercepted: DNS <i>responses</i> are sniffed, and the
-/// answers are remembered. The existing proxy path and domain policies share this evidence. Multiple
-/// live names on one IP are ambiguous; the observer does not guess the application's intended name.
+/// answers are remembered. Domain policies use this evidence. Transparent relays preserve the original IP instead of
+/// treating even a single observed name as the application's intended destination.
 /// </para>
 /// <para>
 /// <b>A response is evidence only if it answers a query this machine was seen to send</b> (SL-SEC-003).
@@ -230,7 +230,8 @@ public sealed class DnsObserver(TimeProvider? timeProvider = null)
         lock (_writeGate)
         {
             // The order queue is never shorter than the table, so it is a cheap first test.
-            if (_pendingOrder.Count >= MaxPendingQueries && _pending.Count >= MaxPendingQueries)
+            if (!_pending.ContainsKey(key) &&
+                _pendingOrder.Count >= MaxPendingQueries && _pending.Count >= MaxPendingQueries)
             {
                 SweepQueries(now);
 
@@ -274,13 +275,6 @@ public sealed class DnsObserver(TimeProvider? timeProvider = null)
             return 0;
         }
 
-        var flags = BinaryPrimitives.ReadUInt16BigEndian(message[2..4]);
-        var responseCode = flags & 0x000F;
-        if (responseCode != 0 || (flags & 0x0200) != 0)
-        {
-            return 0;
-        }
-
         if (!TryReadQuestion(message, ref offset, out var questionName, out var type, out var recordClass))
         {
             return 0;
@@ -289,14 +283,25 @@ public sealed class DnsObserver(TimeProvider? timeProvider = null)
         var key = new QueryKey(
             transport, client.Address, (ushort)client.Port, server.Address, (ushort)server.Port, id, questionName, type, recordClass);
 
-        // Consumed by the first matching answer: a second, possibly forged, "answer" to the same
-        // query finds nothing to answer.
-        if (!_pending.TryRemove(key, out var deadline) || deadline <= _time.GetUtcNow())
+        // Matching, consuming and learning form one generation with Clear/ObserveQuery. A
+        // response from before resume must not repopulate the cleared table after that reset.
+        lock (_writeGate)
         {
-            return 0;
-        }
+            if (!_pending.TryRemove(key, out var deadline) || deadline <= _time.GetUtcNow())
+            {
+                return 0;
+            }
 
-        return Learn(message, offset, questionName);
+            // NODATA, NXDOMAIN, SERVFAIL and truncation still finish the observed transaction.
+            // They teach no addresses; a retry must be observed as a new query.
+            var flags = BinaryPrimitives.ReadUInt16BigEndian(message[2..4]);
+            if ((flags & 0x000F) != 0 || (flags & 0x0200) != 0)
+            {
+                return 0;
+            }
+
+            return Learn(message, offset, questionName);
+        }
     }
 
     private bool IsBelievableResolver(IPAddress server) =>
@@ -324,7 +329,7 @@ public sealed class DnsObserver(TimeProvider? timeProvider = null)
             return false;
         }
 
-        return expectResponse ? answerCount is > 0 and <= 256 : answerCount == 0;
+        return expectResponse ? answerCount <= 256 : answerCount == 0;
     }
 
     private static bool TryReadQuestion(
